@@ -26,7 +26,7 @@ echo ""
 
 # Step 1: Export training data
 echo "📊 Step 1/3: Exporting training data..."
-php artisan export:training-data --limit=1000
+docker compose exec -T laravel-app php artisan export:training-data --limit=1000
 
 if [ $? -ne 0 ]; then
     echo "❌ Failed to export training data"
@@ -36,8 +36,10 @@ fi
 echo ""
 
 # Step 2: Run training
-echo "🎓 Step 2/3: Training AI models..."
+echo "🎓 Step 2/3: Training AI models with Ollama..."
 echo "   This may take 5-15 minutes depending on your library size..."
+echo "   Using Ollama for fast, local AI analysis (no large downloads!)"
+echo "   The script will analyze images and learn patterns..."
 echo ""
 
 docker compose exec -T python-ai python train_model.py

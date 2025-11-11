@@ -32,8 +32,9 @@ class ExportTrainingData extends Command
         
         $limit = (int) $this->option('limit');
         
-        // Get images with complete metadata
-        $images = ImageFile::where('processing_status', 'completed')
+        // Get images with complete metadata (use PostgreSQL connection)
+        $images = ImageFile::on('pgsql')
+            ->where('processing_status', 'completed')
             ->whereNull('deleted_at')
             ->whereNotNull('embedding')
             ->limit($limit)

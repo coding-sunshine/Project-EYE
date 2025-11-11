@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL with pgvector extension
   db:
@@ -35,7 +33,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Ollama service for advanced AI capabilities
+  # Ollama service for advanced AI capabilities (24/7 reliable)
   ollama:
     image: ollama/ollama:latest
     container_name: avinash-eye-ollama
@@ -44,40 +42,63 @@ services:
     volumes:
       - ollama-data:/root/.ollama
       - ./docker/ollama/init-models.sh:/init-models.sh:ro
+      - ./docker/ollama/healthcheck.sh:/healthcheck.sh:ro
     networks:
       - avinash-network
-    restart: unless-stopped
+    restart: always  # Always restart for 24/7 uptime
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        # Start ollama in background
-        /bin/ollama serve &
-        OLLAMA_PID=$!
+        # Start ollama with auto-recovery
+        echo "🚀 Starting Ollama service (24/7 mode)..."
         
-        # Wait for ollama to be ready
-        echo "Waiting for Ollama to start..."
-        until curl -f http://localhost:11434/api/tags >/dev/null 2>&1; do
-          sleep 2
-        done
-        
-        echo "Ollama is ready! Pulling models in background..."
-        
-        # Pull models in background (non-blocking)
-        (
-          echo "📥 Pulling LLaVA model (recommended for image analysis)..."
-          ollama pull llava 2>&1 | grep -E "(pulling|success|already)" || true
+        while true; do
+          # Start ollama in background
+          /bin/ollama serve &
+          OLLAMA_PID=$$!
           
-          echo "✅ Model pulling complete!"
-          echo "🎉 Ollama is ready with all models!"
-        ) &
-        
-        # Keep ollama running
-        wait $OLLAMA_PID
+          # Wait for ollama to be ready (using ollama command, not curl)
+          echo "⏳ Waiting for Ollama to start..."
+          for i in {1..30}; do
+            if /usr/bin/ollama list >/dev/null 2>&1; then
+              echo "✅ Ollama is ready!"
+              break
+            fi
+            if [ "$$i" -eq 30 ]; then
+              echo "⚠️  Ollama took too long to start, but continuing..."
+            fi
+            sleep 2
+          done
+          
+          # Pull models in background (non-blocking)
+          (
+            echo "📥 Checking/pulling required models..."
+            sleep 5  # Give Ollama a moment to fully initialize
+            
+            # Check if llava exists
+            if ! /usr/bin/ollama list 2>/dev/null | grep -q "llava"; then
+              echo "⬇️  Pulling LLaVA model..."
+              /usr/bin/ollama pull llava 2>&1 | grep -E "(pulling|success|already)" || true
+            else
+              echo "✅ LLaVA model already available"
+            fi
+            
+            echo "🎉 All models ready!"
+          ) &
+          
+          # Monitor ollama process
+          wait $$OLLAMA_PID
+          EXIT_CODE=$$?
+          
+          # If we reach here, ollama crashed - restart in 5 seconds
+          echo "⚠️  Ollama process died (exit code: $$EXIT_CODE), restarting in 5 seconds..."
+          sleep 5
+        done
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "/usr/bin/ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5  # More retries for reliability
       start_period: 60s
     deploy:
       resources:
@@ -85,6 +106,10 @@ services:
           memory: 8G
         reservations:
           memory: 4G
+      restart_policy:
+        condition: always
+        delay: 5s
+        max_attempts: 0  # Unlimited restart attempts
     logging:
       driver: "json-file"
       options:
@@ -177,10 +202,21 @@ services:
       - |
         echo "🚀 Starting Laravel initialization..."
         
-        # Wait for database to be fully ready
-        until php artisan db:show >/dev/null 2>&1; do
-          echo "⏳ Waiting for database connection..."
+        # Wait for database to be fully ready (with timeout)
+        echo "⏳ Waiting for database connection..."
+        TIMEOUT=120
+        COUNTER=0
+        until php -r "try { new PDO('pgsql:host=db;port=5432;dbname=${DB_DATABASE:-avinash_eye}', '${DB_USERNAME:-avinash}', '${DB_PASSWORD:-secret}'); exit(0); } catch (Exception \$$e) { exit(1); }" >/dev/null 2>&1; do
           sleep 2
+          COUNTER=$$((COUNTER + 2))
+          if [ $$COUNTER -ge $$TIMEOUT ]; then
+            echo "❌ Timeout waiting for database after $${TIMEOUT}s"
+            echo "   Attempting to continue anyway..."
+            break
+          fi
+          if [ $$((COUNTER % 10)) -eq 0 ]; then
+            echo "   Still waiting... ($${COUNTER}s)"
+          fi
         done
         
         echo "✅ Database connected!"
@@ -189,9 +225,9 @@ services:
         echo "📊 Running database migrations..."
         php artisan migrate --force 2>&1 | grep -v "Nothing to migrate" || true
         
-        # Seed settings if needed
+        # Seed settings if needed (safe to run multiple times)
         echo "⚙️  Checking settings..."
-        php artisan db:seed --class=SettingsSeeder --force 2>&1 | grep -v "already" || true
+        php artisan db:seed --class=SettingsSeeder --force 2>&1 || echo "   Settings seeding skipped or already exists"
         
         # Create storage link if needed
         echo "🔗 Creating storage link..."
@@ -215,11 +251,11 @@ services:
         # Start PHP-FPM
         php-fpm
     healthcheck:
-      test: ["CMD-SHELL", "php artisan db:show || exit 1"]
+      test: ["CMD-SHELL", "php -r \"try { new PDO('pgsql:host=db;port=5432;dbname=${DB_DATABASE:-avinash_eye}', '${DB_USERNAME:-avinash}', '${DB_PASSWORD:-secret}'); exit(0); } catch (Exception \\$$e) { exit(1); }\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -232,7 +268,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Queue Worker for background jobs
+  # Queue Worker for background jobs (24/7 processing)
   queue-worker:
     build:
       context: .
@@ -263,10 +299,10 @@ services:
         condition: service_healthy
       python-ai:
         condition: service_healthy
-    restart: unless-stopped
+    restart: always  # Always restart for 24/7 operation
     command: >
       bash -c "
-        echo '🔄 Starting queue worker...';
+        echo '🔄 Starting queue worker (24/7 mode)...';
         until php artisan db:show >/dev/null 2>&1; do
           echo '⏳ Waiting for database...';
           sleep 2;
@@ -286,6 +322,79 @@ services:
           memory: 1G
         reservations:
           memory: 256M
+      restart_policy:
+        condition: always
+        delay: 5s
+        max_attempts: 0  # Unlimited restart attempts
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Scheduler for automated tasks (training, reanalysis, monitoring)
+  scheduler:
+    build:
+      context: .
+      dockerfile: ./docker/laravel/Dockerfile
+    container_name: avinash-eye-scheduler
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html:rw
+      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
+    networks:
+      - avinash-network
+    environment:
+      - APP_NAME=${APP_NAME:-Avinash-EYE}
+      - APP_ENV=${APP_ENV:-production}
+      - APP_KEY=${APP_KEY}
+      - APP_DEBUG=${APP_DEBUG:-false}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-avinash_eye}
+      - DB_USERNAME=${DB_USERNAME:-avinash}
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
+      - AI_API_URL=http://python-ai:8000
+      - AI_TIMEOUT=${AI_TIMEOUT:-300}
+      - QUEUE_CONNECTION=${QUEUE_CONNECTION:-database}
+    depends_on:
+      laravel-app:
+        condition: service_healthy
+      python-ai:
+        condition: service_healthy
+    restart: always  # Always restart for 24/7 scheduling
+    command: >
+      bash -c "
+        echo '⏰ Starting scheduler (24/7 automated tasks)...';
+        until php artisan db:show >/dev/null 2>&1; do
+          echo '⏳ Waiting for database...';
+          sleep 2;
+        done;
+        echo '✅ Scheduler starting!';
+        echo '📋 Scheduled tasks:';
+        echo '   - System monitoring: Every 5 minutes';
+        echo '   - Auto-training: Daily at 2 AM';
+        echo '   - Auto-reanalysis: Every 6 hours';
+        echo '   - Export training data: Daily at 1 AM';
+        php artisan schedule:work
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep 'schedule:work' | grep -v grep || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: always
+        delay: 5s
+        max_attempts: 0  # Unlimited restart attempts
     logging:
       driver: "json-file"
       options:

@@ -1,25 +1,35 @@
 """
-Train and fine-tune AI models using existing images.
+Train and fine-tune AI models using existing images with Ollama.
 
 This script learns from your image collection to:
 1. Improve search relevance
 2. Better categorization
 3. Personalized descriptions
 4. Enhanced face recognition
+
+Uses Ollama for fast, local AI analysis without downloading large models.
 """
 
 import os
 import json
 import logging
+import sys
+import base64
 from pathlib import Path
 from typing import List, Dict, Tuple
 import numpy as np
-import torch
-from PIL import Image
-from transformers import CLIPProcessor, CLIPModel, BlipProcessor, BlipForConditionalGeneration
 import pickle
 from datetime import datetime
 from collections import Counter, defaultdict
+
+# Try to import ollama
+try:
+    import ollama
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    logging.error("Ollama not installed! Please install: pip install ollama")
+    sys.exit(1)
 
 # Configure logging
 logging.basicConfig(
@@ -35,19 +45,37 @@ MODELS_PATH = Path("/app/models")
 TRAINING_DATA_PATH.mkdir(exist_ok=True)
 MODELS_PATH.mkdir(exist_ok=True)
 
+# Ollama configuration
+OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://ollama:11434')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llava')
+
 
 class ImageTrainer:
-    """Train and improve models based on existing images."""
+    """Train and improve models based on existing images using Ollama."""
     
     def __init__(self):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using device: {self.device}")
+        logger.info("Initializing trainer with Ollama...")
         
-        # Load models
-        self.clip_model = None
-        self.clip_processor = None
-        self.blip_model = None
-        self.blip_processor = None
+        # Initialize Ollama client
+        try:
+            self.ollama_client = ollama.Client(host=OLLAMA_HOST)
+            logger.info(f"Connected to Ollama at {OLLAMA_HOST}")
+            
+            # Check if model is available
+            try:
+                models = self.ollama_client.list()
+                model_names = [m['name'] for m in models.get('models', [])]
+                if OLLAMA_MODEL not in model_names:
+                    logger.warning(f"Model '{OLLAMA_MODEL}' not found. Available models: {model_names}")
+                    logger.info(f"Please pull the model: docker compose exec ollama ollama pull {OLLAMA_MODEL}")
+                else:
+                    logger.info(f"✅ Using Ollama model: {OLLAMA_MODEL}")
+            except Exception as e:
+                logger.warning(f"Could not check Ollama models: {e}")
+                
+        except Exception as e:
+            logger.error(f"Failed to connect to Ollama: {e}")
+            raise
         
         # Training data
         self.image_data = []
@@ -55,31 +83,98 @@ class ImageTrainer:
         self.description_patterns = {}
         self.face_clusters = {}
         
-    def load_models(self):
-        """Load CLIP and BLIP models."""
-        logger.info("Loading models for training...")
-        
+    def check_ollama_connection(self):
+        """Verify Ollama is accessible."""
         try:
-            # Load CLIP
-            self.clip_processor = CLIPProcessor.from_pretrained(
-                "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-            )
-            self.clip_model = CLIPModel.from_pretrained(
-                "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-            ).to(self.device)
-            
-            # Load BLIP
-            self.blip_processor = BlipProcessor.from_pretrained(
-                "Salesforce/blip-image-captioning-large"
-            )
-            self.blip_model = BlipForConditionalGeneration.from_pretrained(
-                "Salesforce/blip-image-captioning-large"
-            ).to(self.device)
-            
-            logger.info("Models loaded successfully")
+            self.ollama_client.list()
+            logger.info("✅ Ollama connection verified")
+            return True
         except Exception as e:
-            logger.error(f"Failed to load models: {e}")
-            raise
+            logger.error(f"❌ Ollama connection failed: {e}")
+            return False
+    
+    def analyze_image_with_ollama(self, image_path: str) -> Dict:
+        """
+        Analyze an image using Ollama vision model.
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            Dict with description, detailed_description, and meta_tags
+        """
+        try:
+            # Read and encode image
+            with open(image_path, "rb") as img_file:
+                img_data = base64.b64encode(img_file.read()).decode('utf-8')
+            
+            prompt = """Analyze this image in detail and provide:
+1. A brief caption (one sentence)
+2. A very detailed description (3-4 sentences) including colors, objects, people, setting, mood, and any notable details.
+3. A list of meta tags/keywords (comma-separated) for searching, including: main subjects, colors, objects, setting, style.
+
+Format your response as JSON:
+{
+  "caption": "...",
+  "detailed_description": "...",
+  "meta_tags": ["tag1", "tag2", ...]
+}"""
+
+            # Call Ollama
+            response = self.ollama_client.generate(
+                model=OLLAMA_MODEL,
+                prompt=prompt,
+                images=[img_data],
+                stream=False
+            )
+            
+            result_text = response.get('response', '')
+            
+            # Try to parse JSON from response
+            try:
+                # Extract JSON from response (might have markdown code blocks)
+                if '```json' in result_text:
+                    json_start = result_text.find('```json') + 7
+                    json_end = result_text.find('```', json_start)
+                    result_text = result_text[json_start:json_end].strip()
+                elif '```' in result_text:
+                    json_start = result_text.find('```') + 3
+                    json_end = result_text.find('```', json_start)
+                    result_text = result_text[json_start:json_end].strip()
+                
+                result = json.loads(result_text)
+                return {
+                    'description': result.get('caption', ''),
+                    'detailed_description': result.get('detailed_description', ''),
+                    'meta_tags': result.get('meta_tags', [])
+                }
+            except json.JSONDecodeError:
+                # Fallback: extract information from text
+                logger.warning(f"Could not parse JSON from Ollama response, using text extraction")
+                lines = result_text.split('\n')
+                description = lines[0] if lines else result_text[:200]
+                return {
+                    'description': description,
+                    'detailed_description': result_text[:500],
+                    'meta_tags': self._extract_tags_from_text(result_text)
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to analyze image {image_path} with Ollama: {e}")
+            return {
+                'description': '',
+                'detailed_description': '',
+                'meta_tags': []
+            }
+    
+    def _extract_tags_from_text(self, text: str) -> List[str]:
+        """Extract potential tags from text."""
+        # Simple keyword extraction
+        words = text.lower().split()
+        # Filter common words and keep meaningful ones
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'was', 'were'}
+        tags = [w for w in words if len(w) > 3 and w not in stop_words]
+        return list(set(tags))[:10]  # Return up to 10 unique tags
     
     def collect_training_data(self, metadata_file: str):
         """
@@ -271,24 +366,22 @@ class ImageTrainer:
     
     def generate_improved_descriptions(self, output_file: str):
         """
-        Generate improved descriptions using learned patterns.
+        Generate improved descriptions using Ollama and learned patterns.
         
         Args:
             output_file: Path to save improved descriptions
         """
-        logger.info("Generating improved descriptions...")
+        logger.info("Generating improved descriptions with Ollama...")
+        logger.info(f"Processing {len(self.image_data)} images...")
         
         improvements = []
         
-        for item in self.image_data:
+        for idx, item in enumerate(self.image_data, 1):
             try:
-                # Load image
-                image = Image.open(item['path']).convert('RGB')
+                logger.info(f"Processing image {idx}/{len(self.image_data)}: {item['path']}")
                 
-                # Generate base description with BLIP
-                inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
-                output = self.blip_model.generate(**inputs, max_length=100)
-                base_description = self.blip_processor.decode(output[0], skip_special_tokens=True)
+                # Analyze with Ollama
+                ollama_result = self.analyze_image_with_ollama(item['path'])
                 
                 # Enhance based on learned patterns
                 relevant_tags = item['meta_tags']
@@ -304,10 +397,16 @@ class ImageTrainer:
                 improvements.append({
                     'image': item['path'],
                     'original_description': item['description'],
-                    'base_description': base_description,
+                    'ollama_description': ollama_result.get('description', ''),
+                    'ollama_detailed': ollama_result.get('detailed_description', ''),
+                    'ollama_tags': ollama_result.get('meta_tags', []),
                     'suggested_tags': relevant_tags,
                     'enhancement_context': enhancement_context
                 })
+                
+                # Small delay to avoid overwhelming Ollama
+                if idx % 10 == 0:
+                    logger.info(f"Progress: {idx}/{len(self.image_data)} images processed")
                 
             except Exception as e:
                 logger.warning(f"Failed to improve description for {item['path']}: {e}")
@@ -360,6 +459,8 @@ class ImageTrainer:
         
         report = {
             'timestamp': datetime.now().isoformat(),
+            'ollama_model': OLLAMA_MODEL,
+            'ollama_host': OLLAMA_HOST,
             'total_images': len(self.image_data),
             'total_tags': len(self.category_patterns),
             'images_with_faces': sum(1 for item in self.image_data if item['face_count'] > 0),
@@ -382,14 +483,16 @@ class ImageTrainer:
 def main():
     """Main training workflow."""
     logger.info("=" * 60)
-    logger.info("Starting AI Model Training")
+    logger.info("Starting AI Model Training with Ollama")
     logger.info("=" * 60)
     
     # Initialize trainer
     trainer = ImageTrainer()
     
-    # Load models
-    trainer.load_models()
+    # Verify Ollama connection
+    if not trainer.check_ollama_connection():
+        logger.error("Cannot proceed without Ollama connection")
+        return
     
     # Check for metadata file
     metadata_file = TRAINING_DATA_PATH / 'images_metadata.json'
@@ -427,7 +530,7 @@ def main():
     trainer.build_search_index()
     
     logger.info("\n" + "=" * 60)
-    logger.info("Phase 5: Generating Improved Descriptions")
+    logger.info("Phase 5: Generating Improved Descriptions with Ollama")
     logger.info("=" * 60)
     improvements_file = TRAINING_DATA_PATH / 'improved_descriptions.json'
     trainer.generate_improved_descriptions(str(improvements_file))
@@ -453,4 +556,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
