@@ -481,6 +481,39 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Adminer - Database Management Tool
+  adminer:
+    image: adminer:latest
+    container_name: avinash-eye-adminer
+    ports:
+      - "8081:8080"
+    networks:
+      - avinash-network
+    environment:
+      - ADMINER_DEFAULT_SERVER=db
+      - ADMINER_DESIGN=pepa-linha
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "php", "-r", "if (file_exists('/var/www/html/index.php')) exit(0); exit(1);"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   pgdata:
     driver: local
