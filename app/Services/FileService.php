@@ -21,17 +21,13 @@ class FileService
      * Allowed image MIME types.
      */
     const ALLOWED_MIME_TYPES = [
-        'image/jpeg',
-        'image/jpg',
-        'image/png',
-        'image/gif',
-        'image/webp',
+        // Accept all file types - validation handled at controller level
     ];
 
     /**
-     * Maximum file size in bytes (10MB).
+     * Maximum file size in bytes (500MB).
      */
-    const MAX_FILE_SIZE = 10485760;
+    const MAX_FILE_SIZE = 524288000;
 
     /**
      * Storage directory for images.
@@ -88,16 +84,13 @@ class FileService
         if (!$file->isValid()) {
             throw new \Exception('Invalid file upload');
         }
-        
-        // Check MIME type
-        if (!in_array($file->getMimeType(), self::ALLOWED_MIME_TYPES)) {
-            throw new \Exception('File type not allowed. Allowed types: jpeg, jpg, png, gif, webp');
-        }
-        
+
         // Check file size
         if ($file->getSize() > self::MAX_FILE_SIZE) {
-            throw new \Exception('File size exceeds maximum allowed size (10MB)');
+            throw new \Exception('File size exceeds maximum allowed size (500MB)');
         }
+
+        // MIME type validation removed - accept all file types
     }
 
     /**
@@ -152,16 +145,23 @@ class FileService
     /**
      * Convert Laravel storage path to shared volume path (for Docker).
      *
-     * @param string $laravelPath
-     * @return string
+     * @param string $laravelPath Laravel storage path (e.g., 'public/images/abc.jpg')
+     * @return string Docker volume path (e.g., '/app/shared/images/abc.jpg')
      */
     public function convertToSharedPath(string $laravelPath): string
     {
-        // Remove 'storage/app/public/images/' or 'public/images/' prefix
-        // Since Docker mounts ./storage/app/public/images to /app/shared
-        // A file at public/images/HASH.jpg maps to /app/shared/HASH.jpg
-        $relativePath = preg_replace('#^(storage/app/)?public/images/#', '', $laravelPath);
-        
+        // Docker mounts ./storage/app/public to /app/shared
+        // Strip 'storage/app/public/' or 'public/' prefix to get relative path
+        // Examples:
+        //   public/images/abc.jpg    → /app/shared/images/abc.jpg
+        //   public/videos/xyz.mp4    → /app/shared/videos/xyz.mp4
+        //   public/documents/doc.pdf → /app/shared/documents/doc.pdf
+        $relativePath = preg_replace(
+            '#^(storage/app/)?public/#',
+            '',
+            $laravelPath
+        );
+
         return '/app/shared/' . $relativePath;
     }
 

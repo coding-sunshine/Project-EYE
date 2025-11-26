@@ -2,10 +2,10 @@
     <!-- Search Header -->
     <div style="margin-bottom: 2rem;">
         <h1 style="font-size: 1.5rem; font-weight: 500; color: #202124; margin-bottom: 0.5rem;">
-            Search your photos
+            Search your files
         </h1>
         <p style="font-size: 0.875rem; color: var(--secondary-color);">
-            Use natural language to find images based on their content
+            Use natural language to find files based on their content
         </p>
     </div>
 
@@ -14,7 +14,7 @@
         <div style="display: flex; gap: 2rem; margin-bottom: 2rem; padding: 1.5rem; background: #f8f9fa; border-radius: 8px;">
             <div>
                 <div style="font-size: 1.5rem; font-weight: 500; color: #202124;">{{ $stats['total_images'] }}</div>
-                <div style="font-size: 0.875rem; color: var(--secondary-color);">Total photos</div>
+                <div style="font-size: 0.875rem; color: var(--secondary-color);">Total files</div>
             </div>
             @if (!empty($results))
                 <div>
@@ -121,11 +121,11 @@
                     <div class="empty-state-icon">🔍</div>
                     <h3 class="empty-state-title">No matches found</h3>
                     <p class="empty-state-description">
-                        No images match your search. Try:
+                        No files match your search. Try:
                         <ul style="text-align: left; margin: 1rem auto; max-width: 400px; color: var(--secondary-color);">
                             <li>Different keywords</li>
                             <li>More general terms</li>
-                            <li>Uploading more images</li>
+                            <li>Uploading more files</li>
                         </ul>
                     </p>
                     <button wire:click="clear" class="btn btn-secondary">
@@ -146,18 +146,18 @@
                 </div>
 
                 <!-- Results Grid -->
-                <div class="photos-grid">
+                <div class="media-grid">
                     @foreach ($results as $result)
-                        <div class="photo-item">
+                        <div class="media-item">
                             <img src="{{ $result['url'] }}" alt="{{ $result['filename'] }}" loading="lazy">
-                            
+
                             <!-- Hover Overlay -->
-                            <div class="photo-overlay">
-                                <div class="photo-overlay-title">
+                            <div class="media-overlay">
+                                <div class="media-overlay-title">
                                     {{ Str::limit($result['description'], 60) }}
                                 </div>
                                 @if ($showScores)
-                                    <div class="photo-overlay-meta" style="display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start;">
+                                    <div class="media-overlay-meta" style="display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start;">
                                         <span style="display: inline-flex; align-items: center; gap: 0.25rem; background: {{ $result['similarity'] >= 90 ? 'rgba(16, 185, 129, 0.9)' : 'rgba(59, 130, 246, 0.9)' }}; padding: 0.25rem 0.5rem; border-radius: 12px;">
                                             <span class="material-symbols-outlined" style="font-size: 0.875rem;">{{ $result['match_type'] == 'exact' ? 'check_circle' : 'search' }}</span>
                                             {{ $result['similarity'] }}% {{ $result['match_type'] == 'exact' ? 'Exact' : 'Match' }}
@@ -175,12 +175,12 @@
     <!-- Empty State - No Images -->
     @if (empty($results) && !$searching && !$error && $stats['total_images'] === 0)
         <div class="empty-state">
-            <div class="empty-state-icon">📸</div>
-            <h3 class="empty-state-title">No photos to search</h3>
-            <p class="empty-state-description">Upload some photos first to start searching</p>
+            <div class="empty-state-icon">📁</div>
+            <h3 class="empty-state-title">No files to search</h3>
+            <p class="empty-state-description">Upload some files first to start searching</p>
             <a wire:navigate href="{{ route('instant-upload') }}" class="btn btn-primary">
                 <span class="material-symbols-outlined" style="font-size: 1.125rem;">upload</span>
-                Upload photos
+                Upload files
             </a>
         </div>
     @endif

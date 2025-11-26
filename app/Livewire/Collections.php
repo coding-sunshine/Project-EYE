@@ -3,7 +3,7 @@
 namespace App\Livewire;
 
 use Livewire\Component;
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use App\Repositories\ImageRepository;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -88,7 +88,7 @@ class Collections extends Component
     {
         try {
             // Get all images with meta_tags
-            $images = ImageFile::whereNull('deleted_at')
+            $images = MediaFile::whereNull('deleted_at')
                 ->where('processing_status', 'completed')
                 ->whereNotNull('meta_tags')
                 ->select('id', 'file_path', 'meta_tags', 'description')
@@ -145,7 +145,7 @@ class Collections extends Component
     {
         try {
             // Get images with faces
-            $imagesWithFaces = ImageFile::whereNull('deleted_at')
+            $imagesWithFaces = MediaFile::whereNull('deleted_at')
                 ->where('processing_status', 'completed')
                 ->where('face_count', '>', 0)
                 ->select('id', 'file_path', 'face_count', 'face_encodings')
@@ -215,7 +215,7 @@ class Collections extends Component
         $this->stats = [
             'total_images' => $stats['total'],
             'total_categories' => count($this->collections),
-            'total_faces' => ImageFile::whereNull('deleted_at')
+            'total_faces' => MediaFile::whereNull('deleted_at')
                 ->where('face_count', '>', 0)
                 ->count(),
         ];

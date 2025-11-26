@@ -3,7 +3,7 @@
 namespace App\Livewire;
 
 use Livewire\Component;
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use App\Services\AiService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -272,13 +272,13 @@ class SystemMonitor extends Component
     protected function getDatabaseStats()
     {
         $stats = [
-            'total_images' => ImageFile::count(),
-            'processing' => ImageFile::where('processing_status', 'processing')->count(),
-            'completed' => ImageFile::where('processing_status', 'completed')->count(),
-            'failed' => ImageFile::where('processing_status', 'failed')->count(),
-            'pending' => ImageFile::where('processing_status', 'pending')->count(),
-            'with_faces' => ImageFile::whereNotNull('face_count')->where('face_count', '>', 0)->count(),
-            'with_ollama_desc' => ImageFile::whereNotNull('detailed_description')->where('detailed_description', '!=', '')->count(),
+            'total_images' => MediaFile::count(),
+            'processing' => MediaFile::where('processing_status', 'processing')->count(),
+            'completed' => MediaFile::where('processing_status', 'completed')->count(),
+            'failed' => MediaFile::where('processing_status', 'failed')->count(),
+            'pending' => MediaFile::where('processing_status', 'pending')->count(),
+            'with_faces' => MediaFile::whereNotNull('face_count')->where('face_count', '>', 0)->count(),
+            'with_ollama_desc' => MediaFile::whereNotNull('detailed_description')->where('detailed_description', '!=', '')->count(),
             'database_size' => $this->getDatabaseSize(),
         ];
         
@@ -349,7 +349,7 @@ class SystemMonitor extends Component
     protected function getProcessingHistory()
     {
         // Get processing history from last 24 hours
-        $history = ImageFile::selectRaw('DATE_TRUNC(\'hour\', created_at) as hour, COUNT(*) as count')
+        $history = MediaFile::selectRaw('DATE_TRUNC(\'hour\', created_at) as hour, COUNT(*) as count')
             ->where('created_at', '>=', now()->subHours(24))
             ->groupBy('hour')
             ->orderBy('hour', 'asc')
@@ -366,8 +366,8 @@ class SystemMonitor extends Component
     
     protected function getDiskUsage()
     {
-        $storagePath = storage_path('app/public/images');
-        
+        $storagePath = storage_path('app/public');
+
         $stats = [
             'images_size' => 0,
             'images_count' => 0,
@@ -375,22 +375,30 @@ class SystemMonitor extends Component
             'disk_total' => 0,
             'disk_used_percent' => 0,
         ];
-        
-        // Get images directory size
-        if (is_dir($storagePath)) {
-            $stats['images_size'] = $this->getDirectorySize($storagePath);
-            $stats['images_count'] = ImageFile::count();
+
+        // Calculate total media storage across all media types
+        $mediaDirectories = ['images', 'videos', 'audio', 'documents', 'archives', 'design'];
+        $totalSize = 0;
+
+        foreach ($mediaDirectories as $dir) {
+            $dirPath = storage_path("app/public/{$dir}");
+            if (is_dir($dirPath)) {
+                $totalSize += $this->getDirectorySize($dirPath);
+            }
         }
-        
+
+        $stats['images_size'] = $totalSize;
+        $stats['images_count'] = MediaFile::count();
+
         // Get disk space
         $stats['disk_free'] = round(@disk_free_space($storagePath) / 1024 / 1024 / 1024, 2); // GB
         $stats['disk_total'] = round(@disk_total_space($storagePath) / 1024 / 1024 / 1024, 2); // GB
-        
+
         if ($stats['disk_total'] > 0) {
             $disk_used = $stats['disk_total'] - $stats['disk_free'];
             $stats['disk_used_percent'] = round(($disk_used / $stats['disk_total']) * 100, 1);
         }
-        
+
         return $stats;
     }
     

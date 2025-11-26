@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libopenblas-dev \
     liblapack-dev \
+    poppler-utils \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

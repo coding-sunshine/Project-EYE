@@ -24,8 +24,14 @@ Schedule::command('system:monitor --fix')
     ->everyFiveMinutes()
     ->withoutOverlapping()
     ->runInBackground()
+    ->before(function () {
+        // Update scheduler status cache for System Monitor
+        \Cache::put('last_scheduler_run', now(), now()->addMinutes(5));
+    })
     ->onSuccess(function () {
         \Log::info('System health check completed successfully');
+        // Also update cache on success
+        \Cache::put('last_scheduler_run', now(), now()->addMinutes(5));
     })
     ->onFailure(function () {
         \Log::error('System health check detected issues');
@@ -72,4 +78,17 @@ Schedule::command('queue:prune-failed --hours=168')
     ->at('03:00')
     ->onSuccess(function () {
         \Log::info('Old failed jobs pruned');
+    });
+
+// Queue Worker Heartbeat (every minute)
+// Updates status cache to show worker is alive even when idle
+Schedule::command('queue:heartbeat')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->onSuccess(function () {
+        \Log::info('Queue worker heartbeat updated successfully');
+    })
+    ->onFailure(function () {
+        \Log::error('Queue worker heartbeat failed');
     });

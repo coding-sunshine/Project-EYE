@@ -3,10 +3,10 @@
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
         <div>
             <h1 style="font-size: 1.5rem; font-weight: 500; color: #202124; margin-bottom: 0.25rem;">
-                Photos
+                Gallery
             </h1>
             <p style="font-size: 0.875rem; color: var(--secondary-color);">
-                {{ count($images) }} {{ Str::plural('photo', count($images)) }}
+                {{ count($files) }} {{ Str::plural('file', count($files)) }}
             </p>
         </div>
         
@@ -28,54 +28,74 @@
         </div>
     </div>
 
-    @if (empty($images))
+    @if (session()->has('message'))
+        <div style="padding: 1rem; background: #e6f4ea; border-left: 4px solid #137333; border-radius: 4px; margin-bottom: 1rem;">
+            <span style="color: #137333;">✓</span> {{ session('message') }}
+        </div>
+    @endif
+
+    @if (empty($files))
         <!-- Empty State -->
         <div class="empty-state">
-            <div class="empty-state-icon">📸</div>
-            <h2 class="empty-state-title">No photos yet</h2>
-            <p class="empty-state-description">Upload photos to see them here</p>
+            <div class="empty-state-icon">📁</div>
+            <h2 class="empty-state-title">No files yet</h2>
+            <p class="empty-state-description">Upload files to see them here</p>
             <a wire:navigate href="{{ route('instant-upload') }}" class="btn btn-primary">
                 <span class="material-symbols-outlined" style="font-size: 1.125rem;">upload</span>
-                Upload photos
+                Upload files
             </a>
         </div>
     @else
         <!-- Google Photos-style Masonry Grid -->
-        <div class="photos-grid">
+        <div class="media-grid">
             @php
                 $lastDate = null;
             @endphp
-            
-            @foreach ($images as $image)
+
+            @foreach ($files as $file)
                 @php
-                    $imageDate = \Carbon\Carbon::parse($image['created_at'])->format('F d, Y');
+                    $imageDate = \Carbon\Carbon::parse($file['created_at'])->format('F d, Y');
                 @endphp
-                
+
                 @if ($imageDate !== $lastDate)
                     <div class="date-separator">{{ $imageDate }}</div>
                     @php $lastDate = $imageDate; @endphp
                 @endif
-                
-                <div class="photo-item" wire:click="viewDetails({{ $image['id'] }})">
-                    <img src="{{ $image['url'] }}" alt="{{ $image['filename'] }}" loading="lazy">
-                    
+
+                <div class="media-item" wire:click="viewDetails({{ $file['id'] }})" style="position: relative;">
+                    <img src="{{ $file['url'] }}" alt="{{ $file['filename'] }}" loading="lazy">
+
+                    <!-- Media Type Badge -->
+                    <div style="position: absolute; top: 8px; left: 8px; z-index: 10; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; text-transform: uppercase;">
+                        {{ strtoupper($file['media_type']) }}
+                    </div>
+
+                    <!-- Reanalyze Button -->
+                    <button wire:click.stop="reanalyze({{ $file['id'] }})"
+                            style="position: absolute; top: 8px; right: 8px; z-index: 10; background: rgba(255,255,255,0.9); border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: all 0.2s;"
+                            onmouseover="this.style.background='white'; this.style.transform='scale(1.1)';"
+                            onmouseout="this.style.background='rgba(255,255,255,0.9)'; this.style.transform='scale(1)';"
+                            title="Reanalyze file">
+                        <span class="material-symbols-outlined" style="font-size: 1.125rem; color: var(--primary-color);">refresh</span>
+                    </button>
+
                     <!-- Hover Overlay -->
-                    <div class="photo-overlay">
-                        @if (!empty($image['meta_tags']))
-                            <div class="photo-overlay-title">
-                                {{ implode(' · ', array_slice($image['meta_tags'], 0, 2)) }}
+                    <div class="media-overlay" style="pointer-events: none;">
+                        @if (!empty($file['meta_tags']))
+                            <div class="media-overlay-title">
+                                {{ implode(' · ', array_slice($file['meta_tags'], 0, 2)) }}
                             </div>
                         @endif
-                        <div class="photo-overlay-meta">
-                            @if ($image['face_count'] > 0)
+                        <div class="media-overlay-meta">
+                            @if ($file['face_count'] > 0)
                                 <span class="material-symbols-outlined" style="font-size: 1rem; vertical-align: middle;">face</span>
-                                {{ $image['face_count'] }}
+                                {{ $file['face_count'] }}
                             @endif
                         </div>
                     </div>
-                    
+
                     <!-- Selection Checkbox -->
-                    <div class="photo-checkbox"></div>
+                    <div class="media-checkbox"></div>
                 </div>
             @endforeach
         </div>

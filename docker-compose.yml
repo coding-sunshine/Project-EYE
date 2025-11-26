@@ -75,12 +75,12 @@ services:
             echo "📥 Checking/pulling required models..."
             sleep 5  # Give Ollama a moment to fully initialize
             
-            # Check if llava exists
-            if ! /usr/bin/ollama list 2>/dev/null | grep -q "llava"; then
-              echo "⬇️  Pulling LLaVA model..."
-              /usr/bin/ollama pull llava 2>&1 | grep -E "(pulling|success|already)" || true
+            # Check if llama3.2 exists
+            if ! /usr/bin/ollama list 2>/dev/null | grep -q "llama3.2"; then
+              echo "⬇️  Pulling Llama 3.2 model..."
+              /usr/bin/ollama pull llama3.2 2>&1 | grep -E "(pulling|success|already)" || true
             else
-              echo "✅ LLaVA model already available"
+              echo "✅ Llama 3.2 model already available"
             fi
             
             echo "🎉 All models ready!"
@@ -125,7 +125,7 @@ services:
     ports:
       - "${PYTHON_AI_PORT:-8000}:8000"
     volumes:
-      - ./storage/app/public/images:/app/shared:rw
+      - ./storage/app/public:/app/shared:rw
       - ./python-ai:/app:rw
       - model-cache:/root/.cache/huggingface
       - training-data:/app/training_data:rw
@@ -170,7 +170,7 @@ services:
     ports:
       - "${NODE_PROCESSOR_PORT:-3000}:3000"
     volumes:
-      - ./storage/app/public/images:/app/shared:rw
+      - ./storage/app/public:/app/shared:rw
       - ./node-image-processor:/app:rw
       - /app/node_modules
     networks:
@@ -211,7 +211,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
       - ./docker/laravel/init.sh:/init.sh:ro
     networks:
       - avinash-network
@@ -321,7 +320,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
     networks:
       - avinash-network
     environment:
@@ -386,7 +384,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
     networks:
       - avinash-network
     environment:

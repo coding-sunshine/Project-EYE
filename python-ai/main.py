@@ -19,6 +19,14 @@ import base64
 import io
 import os
 
+# Register HEIF/HEIC support
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    logging.getLogger(__name__).info("HEIF/HEIC support registered")
+except ImportError:
+    logging.getLogger(__name__).warning("pillow-heif not available - HEIC files won't be supported")
+
 # Import enhanced analysis
 try:
     from enhanced_analysis import enhance_image_analysis

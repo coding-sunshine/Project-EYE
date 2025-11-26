@@ -107,5 +107,5 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Start the FastAPI service
-exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+exec uvicorn main_multimedia:app --host 0.0.0.0 --port 8000 --workers 1
 
