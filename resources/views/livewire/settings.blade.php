@@ -206,7 +206,7 @@
                             <div style="flex: 1;">
                                 <div style="font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem;">Ollama Server Not Detected</div>
                                 <div style="font-size: 0.75rem; opacity: 0.9;">
-                                    Install Ollama from <a href="https://ollama.com" target="_blank" style="color: #d93025; text-decoration: underline;">ollama.com</a> and run: <code style="background: rgba(0,0,0,0.1); padding: 0.125rem 0.5rem; border-radius: 4px; font-family: monospace;">ollama pull llava</code>
+                                    Install Ollama from <a href="https://ollama.com" target="_blank" style="color: #d93025; text-decoration: underline;">ollama.com</a> and run: <code style="background: rgba(0,0,0,0.1); padding: 0.125rem 0.5rem; border-radius: 4px; font-family: monospace;">ollama pull llava:13b-v1.6 && ollama pull qwen2.5:7b</code>
                                 </div>
                             </div>
                         </div>
@@ -231,19 +231,47 @@
 
             <!-- Ollama Model Selection -->
             @if ($ollama_enabled)
-                <div>
-                    <label style="display: block; font-size: 0.875rem; font-weight: 500; color: var(--secondary-color); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">
-                        Ollama Model
-                    </label>
-                    <select wire:model="ollama_model" 
-                            style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.875rem;">
-                        @foreach ($available_ollama_models as $model_id => $model_name)
-                            <option value="{{ $model_id }}">{{ $model_name }}</option>
-                        @endforeach
-                    </select>
-                    <div style="font-size: 0.75rem; color: var(--secondary-color); margin-top: 0.5rem;">
-                        Make sure this model is pulled: <code style="background: var(--hover-bg); padding: 0.125rem 0.5rem; border-radius: 4px; font-family: monospace;">ollama pull {{ $ollama_model }}</code>
+                <div style="display: grid; gap: 1rem; grid-template-columns: 1fr 1fr;">
+                    <!-- Vision Model (for images/videos) -->
+                    <div>
+                        <label style="display: block; font-size: 0.875rem; font-weight: 500; color: var(--secondary-color); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                            Vision Model (Images/Videos)
+                        </label>
+                        <select wire:model="ollama_model"
+                                style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.875rem;">
+                            @foreach ($available_ollama_models as $model_id => $model_name)
+                                <option value="{{ $model_id }}">{{ $model_name }}</option>
+                            @endforeach
+                        </select>
+                        <div style="font-size: 0.75rem; color: var(--secondary-color); margin-top: 0.5rem;">
+                            For analyzing images and video frames
+                        </div>
                     </div>
+
+                    <!-- Document Model (for text/summaries) -->
+                    <div>
+                        <label style="display: block; font-size: 0.875rem; font-weight: 500; color: var(--secondary-color); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                            Document Model (Text/Summaries)
+                        </label>
+                        <select wire:model="ollama_model_document"
+                                style="width: 100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.875rem;">
+                            @foreach ($available_ollama_document_models as $model_id => $model_name)
+                                <option value="{{ $model_id }}">{{ $model_name }}</option>
+                            @endforeach
+                        </select>
+                        <div style="font-size: 0.75rem; color: var(--secondary-color); margin-top: 0.5rem;">
+                            For document analysis and summaries
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Model pull commands -->
+                <div style="margin-top: 1rem; padding: 0.75rem 1rem; background: var(--hover-bg); border-radius: 8px; font-size: 0.75rem; font-family: monospace;">
+                    <div style="margin-bottom: 0.5rem; color: var(--secondary-color); font-family: inherit; text-transform: uppercase; letter-spacing: 0.5px;">Pull required models:</div>
+                    <code style="display: block; color: #202124;">ollama pull {{ $ollama_model }}</code>
+                    @if ($ollama_model !== $ollama_model_document)
+                        <code style="display: block; color: #202124; margin-top: 0.25rem;">ollama pull {{ $ollama_model_document }}</code>
+                    @endif
                 </div>
             @endif
             
@@ -269,7 +297,7 @@
             </p>
 
             <label style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
-                <input type="checkbox" 
+                <input type="checkbox"
                        wire:model="face_detection_enabled"
                        style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary-color);">
                 <div style="flex: 1;">
@@ -281,6 +309,49 @@
                     </div>
                 </div>
             </label>
+        </div>
+
+        <!-- OCR Engine -->
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <h2 style="font-size: 1.125rem; font-weight: 500; margin-bottom: 1rem; color: #202124;">
+                <span class="material-symbols-outlined" style="font-size: 1.25rem; vertical-align: middle; margin-right: 0.5rem;">document_scanner</span>
+                OCR Engine (Document Text Extraction)
+            </h2>
+            <p style="font-size: 0.875rem; color: var(--secondary-color); margin-bottom: 1rem;">
+                Choose the OCR engine for extracting text from scanned documents and images.
+            </p>
+
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                @foreach ($available_ocr_engines as $engine_id => $engine_name)
+                    <label style="display: flex; align-items: start; gap: 0.75rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: var(--transition);"
+                           onmouseover="this.style.background='var(--hover-bg)'"
+                           onmouseout="this.style.background='white'"
+                           onclick="this.querySelector('input').checked = true; @this.set('ocr_engine', '{{ $engine_id }}')">
+                        <input type="radio"
+                               wire:model="ocr_engine"
+                               value="{{ $engine_id }}"
+                               style="margin-top: 0.25rem; width: 18px; height: 18px; cursor: pointer; accent-color: var(--primary-color);">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 500; color: #202124; margin-bottom: 0.25rem;">
+                                {{ $engine_name }}
+                            </div>
+                            @if ($engine_id === 'auto')
+                                <div style="font-size: 0.75rem; color: var(--secondary-color);">
+                                    Recommended: Uses PaddleOCR for best accuracy, falls back to Tesseract if unavailable
+                                </div>
+                            @elseif ($engine_id === 'paddleocr')
+                                <div style="font-size: 0.75rem; color: var(--secondary-color);">
+                                    Better accuracy for complex layouts, tables, and multi-language documents
+                                </div>
+                            @else
+                                <div style="font-size: 0.75rem; color: var(--secondary-color);">
+                                    Lightweight and fast for simple documents with clean text
+                                </div>
+                            @endif
+                        </div>
+                    </label>
+                @endforeach
+            </div>
         </div>
 
         <!-- Save Button -->

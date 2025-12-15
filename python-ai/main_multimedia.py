@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from transformers import CLIPProcessor, CLIPModel
+from transformers import AutoProcessor, AutoModelForCausalLM
 import torch
 from PIL import Image
 import numpy as np
@@ -40,6 +41,15 @@ except ImportError:
     OLLAMA_AVAILABLE = False
     logging.warning("Ollama not available, will use BLIP only")
 
+# Import comprehensive image analyzer
+try:
+    from comprehensive_analyzer import ComprehensiveImageAnalyzer, create_analyzer
+    COMPREHENSIVE_ANALYZER_AVAILABLE = True
+    logging.info("ComprehensiveImageAnalyzer loaded successfully")
+except ImportError as e:
+    COMPREHENSIVE_ANALYZER_AVAILABLE = False
+    logging.warning(f"ComprehensiveImageAnalyzer not available: {e}")
+
 try:
     import whisper
     WHISPER_AVAILABLE = True
@@ -52,7 +62,23 @@ try:
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
-    logging.warning("Tesseract not available, OCR disabled")
+    logging.warning("Tesseract not available")
+
+# PaddleOCR - Better accuracy, especially for complex layouts
+try:
+    from paddleocr import PaddleOCR
+    PADDLE_OCR = None  # Lazy initialization
+    PADDLEOCR_AVAILABLE = True
+    logging.info("PaddleOCR is available")
+except ImportError:
+    PADDLE_OCR = None
+    PADDLEOCR_AVAILABLE = False
+    logging.warning("PaddleOCR not available")
+
+# At least one OCR engine must be available
+OCR_AVAILABLE = TESSERACT_AVAILABLE or PADDLEOCR_AVAILABLE
+if not OCR_AVAILABLE:
+    logging.warning("No OCR engine available, OCR disabled")
 
 # Parallel processing configuration
 # Number of worker threads for video frame processing
@@ -82,8 +108,88 @@ blip_processor = None
 blip_model = None
 clip_processor = None
 clip_model = None
+florence_processor = None
+florence_model = None
+siglip_processor = None
+siglip_model = None
+aimv2_processor = None
+aimv2_model = None
 whisper_model = None
 device = None
+
+
+def extract_json_from_response(text: str) -> Optional[dict]:
+    """
+    Extract JSON from LLM response text using balanced brace algorithm.
+    Handles nested objects/arrays and multiple JSON blocks.
+
+    Args:
+        text: Raw text response from LLM that may contain JSON
+
+    Returns:
+        Parsed dict if valid JSON found, None otherwise
+    """
+    import re
+
+    if not text or not isinstance(text, str):
+        return None
+
+    # Strategy 1: Try parsing the entire text as JSON first
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Find JSON using balanced brace counting
+    # This handles nested objects like {"a": {"b": 1}, "c": [1, 2]}
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+
+    brace_count = 0
+    in_string = False
+    escape_next = False
+
+    for i, char in enumerate(text[start_idx:], start=start_idx):
+        if escape_next:
+            escape_next = False
+            continue
+
+        if char == '\\' and in_string:
+            escape_next = True
+            continue
+
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                # Found complete JSON object
+                json_str = text[start_idx:i+1]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Try finding next JSON block
+                    remaining = text[i+1:]
+                    return extract_json_from_response(remaining)
+
+    # Strategy 3: Try regex for simple cases (fallback)
+    # More permissive pattern for edge cases
+    simple_match = re.search(r'\{[^{}]+\}', text)
+    if simple_match:
+        try:
+            return json.loads(simple_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
 
 
 # Request/Response Models
@@ -92,6 +198,15 @@ class AnalyzeImageRequest(BaseModel):
     image_path: str
     use_ollama: bool = True
     detect_faces: bool = True
+    captioning_model: str = "florence"  # "blip" or "florence" (florence recommended)
+    embedding_model: str = "aimv2"  # "clip", "siglip", or "aimv2" (aimv2 recommended - outperforms SigLIP)
+    ollama_model: str = "llava:13b-v1.6"  # Ollama model for detailed descriptions
+    # Maximum analysis coverage options
+    detect_objects: bool = True  # Object detection via Florence-2 <OD>
+    extract_colors: bool = True  # Dominant color extraction via K-means
+    analyze_quality: bool = True  # Image quality metrics via OpenCV
+    compute_hashes: bool = True  # pHash/dHash for duplicate detection
+    classify_scene: bool = True  # Scene classification via Ollama
 
 
 class AnalyzeVideoRequest(BaseModel):
@@ -105,8 +220,9 @@ class AnalyzeDocumentRequest(BaseModel):
     """Request model for document analysis."""
     document_path: str
     perform_ocr: bool = True
+    ocr_engine: str = "auto"  # "auto", "paddleocr", "tesseract"
     use_ollama: bool = False
-    ollama_model: str = "llama3.2"
+    ollama_model: str = "qwen2.5:7b"
 
 
 class TranscribeAudioRequest(BaseModel):
@@ -135,6 +251,39 @@ class AnalyzeCodeFileRequest(BaseModel):
     file_path: str
 
 
+class AnalyzeImageComprehensiveRequest(BaseModel):
+    """Request model for comprehensive 4-pass VLM image analysis."""
+    image_path: str
+    analysis_mode: str = "comprehensive"  # "comprehensive" (4-pass ~40-60s) or "quick" (1-pass ~8s)
+    ollama_model: str = "llava:13b-v1.6"  # Vision model for all passes
+    embedding_model: str = "aimv2"  # Embedding model for similarity search
+    detect_faces: bool = True
+    generate_embedding: bool = True
+
+
+class AnalyzeImageComprehensiveResponse(BaseModel):
+    """Response model for comprehensive 4-pass VLM image analysis."""
+    success: bool
+    analysis_mode: str  # "comprehensive" or "quick"
+    # 4-pass analysis results (JSONB-ready)
+    content_analysis: Optional[Dict[str, Any]] = None  # Pass 1: Content & Scene
+    people_analysis: Optional[Dict[str, Any]] = None  # Pass 2: People & Emotion
+    quality_analysis: Optional[Dict[str, Any]] = None  # Pass 3: Quality & Technical
+    context_analysis: Optional[Dict[str, Any]] = None  # Pass 4: Context & Metadata
+    combined_analysis: Optional[Dict[str, Any]] = None  # Merged results with summary
+    # Analysis metadata
+    passes_completed: int = 0
+    passes_failed: int = 0
+    analysis_duration_seconds: float = 0.0
+    errors: List[str] = []
+    # Standard image analysis fields
+    embedding: Optional[List[float]] = None
+    faces_detected: int = 0
+    face_locations: List[List[int]] = []
+    face_encodings: List[List[float]] = []
+    thumbnail_path: Optional[str] = None
+
+
 class AnalyzeImageResponse(BaseModel):
     """Response model for image analysis."""
     description: str
@@ -146,6 +295,14 @@ class AnalyzeImageResponse(BaseModel):
     face_encodings: List[List[float]] = []
     thumbnail_path: Optional[str] = None  # Path to generated thumbnail (JPEG)
     extracted_text: Optional[str] = ""  # Extracted text for SVG/other special formats
+    # Maximum analysis coverage fields
+    objects_detected: Optional[Dict[str, Any]] = None  # Florence-2 <OD> results
+    scene_classification: Optional[Dict[str, Any]] = None  # Ollama scene classification
+    dominant_colors: Optional[List[Dict[str, Any]]] = None  # K-means color extraction
+    image_quality: Optional[Dict[str, Any]] = None  # OpenCV quality metrics
+    quality_tier: Optional[str] = None  # excellent, good, fair, poor
+    phash: Optional[str] = None  # Perceptual hash
+    dhash: Optional[str] = None  # Difference hash
 
 
 class AnalyzeVideoResponse(BaseModel):
@@ -277,6 +434,81 @@ def generate_caption_blip(image: Image.Image) -> str:
     return blip_processor.decode(out[0], skip_special_tokens=True)
 
 
+def get_florence_model():
+    """Lazily initialize Florence-2 model (it's heavy to load)."""
+    global florence_processor, florence_model
+    if florence_processor is None or florence_model is None:
+        logger.info("Loading Florence-2 model...")
+        try:
+            # Use Florence-2-base for better performance on Apple Silicon
+            model_name = "microsoft/Florence-2-base"
+            florence_processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+            florence_model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                torch_dtype=torch.float32  # Use float32 for CPU/Apple Silicon compatibility
+            )
+            florence_model.to(device)
+            florence_model.eval()
+            logger.info("Florence-2 model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Failed to load Florence-2: {str(e)}")
+            return None, None
+    return florence_processor, florence_model
+
+
+def generate_caption_florence(image: Image.Image, detailed: bool = True) -> str:
+    """Generate caption using Florence-2."""
+    processor, model = get_florence_model()
+    if processor is None or model is None:
+        logger.warning("Florence-2 not available, falling back to BLIP")
+        return generate_caption_blip(image)
+
+    try:
+        # Use DETAILED_CAPTION for more comprehensive descriptions
+        task_prompt = "<MORE_DETAILED_CAPTION>" if detailed else "<CAPTION>"
+
+        inputs = processor(text=task_prompt, images=image, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=256,
+                num_beams=3,
+                do_sample=False
+            )
+
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+
+        # Parse Florence-2 output format
+        parsed = processor.post_process_generation(
+            generated_text,
+            task=task_prompt,
+            image_size=(image.width, image.height)
+        )
+
+        # Extract the caption from the parsed result
+        if isinstance(parsed, dict):
+            caption = parsed.get(task_prompt, generated_text)
+        else:
+            caption = str(parsed)
+
+        return caption.strip()
+
+    except Exception as e:
+        logger.error(f"Florence-2 caption generation failed: {str(e)}")
+        return generate_caption_blip(image)
+
+
+def generate_caption(image: Image.Image, model: str = "blip") -> str:
+    """Generate caption using the specified model."""
+    if model.lower() == "florence" or model.lower() == "florence-2":
+        return generate_caption_florence(image, detailed=True)
+    else:
+        return generate_caption_blip(image)
+
+
 def detect_faces(image: Image.Image) -> Dict:
     """Detect faces in image and return locations and encodings."""
     try:
@@ -297,7 +529,455 @@ def detect_faces(image: Image.Image) -> Dict:
         return {"count": 0, "locations": [], "encodings": []}
 
 
-def generate_image_embedding(image: Image.Image) -> np.ndarray:
+# ============================================================================
+# Maximum Analysis Coverage Functions
+# ============================================================================
+
+def detect_objects_florence(image: Image.Image) -> Dict:
+    """
+    Detect objects in image using Florence-2 <OD> task.
+    Zero additional memory cost - reuses the already loaded Florence-2 model.
+
+    Returns:
+        Dict with labels, bboxes, and label_counts
+    """
+    processor, model = get_florence_model()
+    if processor is None or model is None:
+        logger.warning("Florence-2 not available for object detection")
+        return {"labels": [], "bboxes": [], "label_counts": {}}
+
+    try:
+        task_prompt = "<OD>"  # Object Detection task
+
+        inputs = processor(text=task_prompt, images=image, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            generated_ids = model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=1024,
+                num_beams=3,
+                do_sample=False
+            )
+
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
+
+        # Parse Florence-2 output format
+        parsed = processor.post_process_generation(
+            generated_text,
+            task=task_prompt,
+            image_size=(image.width, image.height)
+        )
+
+        # Extract labels and bboxes with robust multi-format parsing
+        labels = []
+        bboxes = []
+
+        # Florence-2 can return different output formats depending on version/config
+        # Strategy 1: Standard format with task key {'<OD>': {'bboxes': [], 'labels': []}}
+        if isinstance(parsed, dict) and task_prompt in parsed:
+            od_result = parsed[task_prompt]
+            if isinstance(od_result, dict):
+                labels = od_result.get("labels", [])
+                bboxes = od_result.get("bboxes", [])
+                logger.debug(f"Parsed using standard format (task key present)")
+
+        # Strategy 2: Flat format without task key {'bboxes': [], 'labels': []}
+        if not labels and isinstance(parsed, dict):
+            if "labels" in parsed or "bboxes" in parsed:
+                labels = parsed.get("labels", [])
+                bboxes = parsed.get("bboxes", [])
+                logger.debug(f"Parsed using flat format (no task key)")
+
+        # Strategy 3: Check for 'objects' key (alternative format)
+        if not labels and isinstance(parsed, dict) and "objects" in parsed:
+            objects = parsed.get("objects", [])
+            if isinstance(objects, list):
+                for obj in objects:
+                    if isinstance(obj, dict):
+                        if "label" in obj:
+                            labels.append(obj["label"])
+                        if "bbox" in obj:
+                            bboxes.append(obj["bbox"])
+                logger.debug(f"Parsed using objects array format")
+
+        # Strategy 4: Parse raw generated_text as fallback using robust JSON extraction
+        if not labels and generated_text:
+            fallback_parsed = extract_json_from_response(generated_text)
+            if fallback_parsed and isinstance(fallback_parsed, dict):
+                labels = fallback_parsed.get("labels", [])
+                bboxes = fallback_parsed.get("bboxes", [])
+                if labels:
+                    logger.debug(f"Parsed using JSON extraction from generated_text")
+
+        # Log warning if still empty after all strategies
+        if not labels:
+            logger.warning(f"Object detection returned no labels. Raw output type: {type(parsed)}, keys: {parsed.keys() if isinstance(parsed, dict) else 'N/A'}")
+
+        # Count label occurrences
+        from collections import Counter
+        label_counts = dict(Counter(labels))
+
+        logger.info(f"Object detection found {len(labels)} objects: {label_counts}")
+
+        return {
+            "labels": labels,
+            "bboxes": [[int(b) for b in bbox] for bbox in bboxes] if bboxes else [],
+            "label_counts": label_counts
+        }
+
+    except Exception as e:
+        logger.error(f"Florence-2 object detection failed: {str(e)}")
+        return {"labels": [], "bboxes": [], "label_counts": {}}
+
+
+def extract_dominant_colors(image: Image.Image, n_colors: int = 5) -> List[Dict]:
+    """
+    Extract dominant colors from image using K-means clustering.
+    CPU-only, memory efficient (~50MB for processing).
+
+    Returns:
+        List of dicts with hex, rgb, name, and percentage for each dominant color
+    """
+    try:
+        from sklearn.cluster import KMeans
+
+        # Resize image for faster processing (max 200x200)
+        img = image.copy()
+        img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+
+        # Convert to numpy array
+        img_array = np.array(img)
+
+        # Handle grayscale images
+        if len(img_array.shape) == 2:
+            img_array = np.stack([img_array] * 3, axis=-1)
+        elif img_array.shape[2] == 4:  # RGBA
+            img_array = img_array[:, :, :3]
+
+        # Reshape to (n_pixels, 3)
+        pixels = img_array.reshape(-1, 3)
+
+        # Filter out very dark and very light pixels for better color detection
+        brightness = np.mean(pixels, axis=1)
+        mask = (brightness > 20) & (brightness < 235)
+        filtered_pixels = pixels[mask] if np.sum(mask) > n_colors else pixels
+
+        # K-means clustering
+        kmeans = KMeans(n_clusters=min(n_colors, len(filtered_pixels)), random_state=42, n_init=10)
+        kmeans.fit(filtered_pixels)
+
+        # Get cluster centers and counts
+        centers = kmeans.cluster_centers_.astype(int)
+        labels = kmeans.labels_
+
+        # Calculate percentage for each color
+        from collections import Counter
+        label_counts = Counter(labels)
+        total = len(labels)
+
+        colors = []
+        for i, center in enumerate(centers):
+            r, g, b = center
+            hex_color = f"#{r:02x}{g:02x}{b:02x}"
+            percentage = (label_counts[i] / total) * 100
+
+            colors.append({
+                "hex": hex_color,
+                "rgb": [int(r), int(g), int(b)],
+                "name": _get_color_name(r, g, b),
+                "percentage": round(percentage, 1)
+            })
+
+        # Sort by percentage (most dominant first)
+        colors.sort(key=lambda x: x["percentage"], reverse=True)
+
+        logger.info(f"Extracted {len(colors)} dominant colors")
+        return colors
+
+    except Exception as e:
+        logger.error(f"Color extraction failed: {str(e)}")
+        return []
+
+
+def _get_color_name(r: int, g: int, b: int) -> str:
+    """Get approximate color name from RGB values."""
+    # Simple color naming based on hue and saturation
+    max_c = max(r, g, b)
+    min_c = min(r, g, b)
+    diff = max_c - min_c
+
+    # Grayscale detection
+    if diff < 20:
+        if max_c < 50:
+            return "black"
+        elif max_c < 128:
+            return "gray"
+        elif max_c < 200:
+            return "silver"
+        else:
+            return "white"
+
+    # Color detection based on dominant channel
+    if r >= g and r >= b:
+        if g > b + 30:
+            return "orange" if g > 128 else "brown"
+        elif b > g + 30:
+            return "pink" if r > 180 else "purple"
+        else:
+            return "red"
+    elif g >= r and g >= b:
+        if b > r + 30:
+            return "cyan" if b > 128 else "teal"
+        elif r > b + 30:
+            return "yellow" if r > 180 else "olive"
+        else:
+            return "green"
+    else:  # b is dominant
+        if r > g + 30:
+            return "purple" if r > 100 else "indigo"
+        elif g > r + 30:
+            return "cyan"
+        else:
+            return "blue"
+
+
+def analyze_image_quality(image: Image.Image) -> Dict:
+    """
+    Analyze image quality using OpenCV metrics.
+
+    Returns:
+        Dict with overall_score, sharpness, brightness, contrast, saturation, noise, and issues
+    """
+    try:
+        # Convert PIL to OpenCV format
+        img_array = np.array(image)
+        if len(img_array.shape) == 2:
+            gray = img_array
+            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
+        else:
+            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+        # 1. Sharpness (Laplacian variance)
+        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        # Normalize: <100 is blurry, >500 is very sharp
+        sharpness = min(1.0, laplacian_var / 500)
+        is_blurry = laplacian_var < 100
+
+        # 2. Brightness (mean luminance)
+        brightness_raw = np.mean(gray)
+        # Ideal brightness is around 128 (middle gray)
+        brightness = 1.0 - abs(brightness_raw - 128) / 128
+        is_dark = brightness_raw < 50
+        is_overexposed = brightness_raw > 220
+
+        # 3. Contrast (standard deviation of luminance)
+        contrast_raw = np.std(gray)
+        # Normalize: <30 is low contrast, >70 is good contrast
+        contrast = min(1.0, contrast_raw / 70)
+        is_low_contrast = contrast_raw < 30
+
+        # 4. Saturation (for color images)
+        saturation = 0.5  # default for grayscale
+        is_desaturated = False
+        if len(img_array.shape) == 3 and img_array.shape[2] >= 3:
+            hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+            saturation_raw = np.mean(hsv[:, :, 1])
+            saturation = saturation_raw / 255
+            is_desaturated = saturation_raw < 30
+
+        # 5. Noise estimation (high-frequency content in smooth areas)
+        # Use median filter comparison
+        denoised = cv2.medianBlur(gray, 5)
+        noise_raw = np.mean(np.abs(gray.astype(float) - denoised.astype(float)))
+        # Normalize: <5 is clean, >20 is noisy
+        noise_score = max(0, 1.0 - noise_raw / 20)
+        is_noisy = noise_raw > 15
+
+        # Calculate overall score (weighted average)
+        overall_score = (
+            sharpness * 0.35 +
+            brightness * 0.20 +
+            contrast * 0.20 +
+            saturation * 0.10 +
+            noise_score * 0.15
+        )
+
+        # Determine quality tier
+        if overall_score >= 0.8:
+            quality_tier = "excellent"
+        elif overall_score >= 0.6:
+            quality_tier = "good"
+        elif overall_score >= 0.4:
+            quality_tier = "fair"
+        else:
+            quality_tier = "poor"
+
+        # Convert numpy bools to Python native bools for JSON serialization
+        issues = {
+            "is_blurry": bool(is_blurry),
+            "is_dark": bool(is_dark),
+            "is_overexposed": bool(is_overexposed),
+            "is_low_contrast": bool(is_low_contrast),
+            "is_desaturated": bool(is_desaturated),
+            "is_noisy": bool(is_noisy)
+        }
+
+        result = {
+            "overall_score": round(overall_score, 2),
+            "sharpness": round(sharpness, 2),
+            "brightness": round(brightness, 2),
+            "contrast": round(contrast, 2),
+            "saturation": round(saturation, 2),
+            "noise_score": round(noise_score, 2),
+            "quality_tier": quality_tier,
+            "issues": issues
+        }
+
+        logger.info(f"Image quality: {quality_tier} (score: {overall_score:.2f})")
+        return result
+
+    except Exception as e:
+        logger.error(f"Image quality analysis failed: {str(e)}")
+        return {
+            "overall_score": 0.5,
+            "sharpness": 0.5,
+            "brightness": 0.5,
+            "contrast": 0.5,
+            "saturation": 0.5,
+            "noise_score": 0.5,
+            "quality_tier": "unknown",
+            "issues": {}
+        }
+
+
+def compute_perceptual_hashes(image: Image.Image) -> Dict[str, str]:
+    """
+    Compute perceptual hashes for duplicate detection.
+
+    pHash (perceptual hash) - best for similar images with different sizes/formats
+    dHash (difference hash) - good for detecting crops and edits
+
+    Returns:
+        Dict with phash and dhash as hex strings
+    """
+    try:
+        import imagehash
+
+        # Ensure image is in a format imagehash can process
+        img = image.copy()
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+
+        # pHash - perceptual hash using DCT
+        phash = str(imagehash.phash(img))
+
+        # dHash - difference hash (horizontal gradient)
+        dhash = str(imagehash.dhash(img))
+
+        logger.info(f"Computed hashes: pHash={phash}, dHash={dhash}")
+
+        return {
+            "phash": phash,
+            "dhash": dhash
+        }
+
+    except ImportError:
+        logger.error("imagehash library not available")
+        return {"phash": None, "dhash": None}
+    except Exception as e:
+        logger.error(f"Hash computation failed: {str(e)}")
+        return {"phash": None, "dhash": None}
+
+
+def classify_scene_ollama(image: Image.Image, ollama_model: str = "llava:13b-v1.6") -> Dict:
+    """
+    Classify scene/environment using Ollama vision model.
+
+    Tries requested model first, falls back to llava:latest if not available.
+
+    Returns:
+        Dict with environment, setting, context, mood, and confidence
+    """
+    if not OLLAMA_AVAILABLE or ollama_client is None:
+        logger.warning("Ollama not available for scene classification")
+        return {}
+
+    # Models to try in order of preference
+    models_to_try = [ollama_model]
+    if ollama_model != "llava:latest":
+        models_to_try.append("llava:latest")
+
+    try:
+        import base64
+        from io import BytesIO
+
+        # Convert image to base64
+        img = image.copy()
+        img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)  # Limit size for Ollama
+
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        prompt = """Analyze this image and provide a structured scene classification. Return ONLY a JSON object with these fields:
+{
+    "environment": "indoor" or "outdoor" or "mixed",
+    "setting": brief location type (e.g., "beach", "office", "forest", "city street", "living room"),
+    "context": list of 2-4 contextual tags (e.g., ["vacation", "relaxation"], ["work", "professional"]),
+    "mood": overall mood/atmosphere (e.g., "peaceful", "energetic", "formal", "casual"),
+    "time_of_day": if determinable ("morning", "afternoon", "evening", "night", "unknown"),
+    "weather": if outdoor and determinable ("sunny", "cloudy", "rainy", "unknown"),
+    "confidence": your confidence in this classification (0.0 to 1.0)
+}
+Return ONLY valid JSON, no other text."""
+
+        last_error = None
+        for model in models_to_try:
+            try:
+                logger.info(f"Attempting scene classification with model: {model}")
+                response = ollama_client.generate(
+                    model=model,
+                    prompt=prompt,
+                    images=[img_base64],
+                    options={"temperature": 0.3}  # Lower temperature for more consistent output
+                )
+
+                # Parse JSON response using robust extraction
+                response_text = response.get('response', '').strip()
+                result = extract_json_from_response(response_text)
+
+                if result:
+                    logger.info(f"Scene classified with {model}: {result.get('setting', 'unknown')} ({result.get('environment', 'unknown')})")
+                    result['model_used'] = model  # Track which model was used
+                    return result
+                else:
+                    logger.warning(f"Could not parse scene classification response from {model}: {response_text[:100]}")
+                    last_error = f"Failed to parse response from {model}"
+                    continue
+
+            except Exception as e:
+                error_msg = str(e)
+                if "not found" in error_msg.lower() or "404" in error_msg:
+                    logger.warning(f"Model {model} not available, trying next...")
+                    last_error = f"Model {model} not found"
+                    continue
+                else:
+                    logger.error(f"Scene classification with {model} failed: {error_msg}")
+                    last_error = error_msg
+                    continue
+
+        # All models failed
+        logger.error(f"Scene classification failed with all models. Last error: {last_error}")
+        return {}
+
+    except Exception as e:
+        logger.error(f"Scene classification failed: {str(e)}")
+        return {}
+
+
+def generate_image_embedding_clip(image: Image.Image) -> np.ndarray:
     """Generate normalized embedding vector using CLIP."""
     inputs = clip_processor(images=image, return_tensors="pt").to(device)
 
@@ -306,6 +986,134 @@ def generate_image_embedding(image: Image.Image) -> np.ndarray:
 
     embedding = image_features / image_features.norm(dim=-1, keepdim=True)
     return embedding.cpu().numpy().flatten()
+
+
+def get_siglip_model():
+    """Lazily initialize SigLIP model (it's heavy to load)."""
+    global siglip_processor, siglip_model
+    if siglip_processor is None or siglip_model is None:
+        logger.info("Loading SigLIP model...")
+        try:
+            from transformers import AutoProcessor, AutoModel
+            # Use SigLIP base for good balance of quality and speed
+            model_name = "google/siglip-base-patch16-224"
+            siglip_processor = AutoProcessor.from_pretrained(model_name)
+            siglip_model = AutoModel.from_pretrained(model_name)
+            siglip_model.to(device)
+            siglip_model.eval()
+            logger.info("SigLIP model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Failed to load SigLIP: {str(e)}")
+            return None, None
+    return siglip_processor, siglip_model
+
+
+def generate_image_embedding_siglip(image: Image.Image) -> np.ndarray:
+    """Generate normalized embedding vector using SigLIP."""
+    processor, model = get_siglip_model()
+    if processor is None or model is None:
+        logger.warning("SigLIP not available, falling back to CLIP")
+        return generate_image_embedding_clip(image)
+
+    try:
+        inputs = processor(images=image, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+
+        embedding = outputs / outputs.norm(dim=-1, keepdim=True)
+        return embedding.cpu().numpy().flatten()
+
+    except Exception as e:
+        logger.error(f"SigLIP embedding failed: {str(e)}")
+        return generate_image_embedding_clip(image)
+
+
+def get_aimv2_model():
+    """
+    Lazily initialize AIMv2 model (Apple's Autoregressive Image Models v2).
+
+    AIMv2 consistently outperforms state-of-the-art contrastive models like CLIP
+    and SigLIP in multimodal image understanding across diverse settings.
+
+    Available variants:
+    - apple/aimv2-large-patch14-224 (recommended - good balance)
+    - apple/aimv2-huge-patch14-224 (highest quality, more memory)
+    - apple/aimv2-large-patch14-336 (larger input, more detail)
+    """
+    global aimv2_processor, aimv2_model
+    if aimv2_processor is None or aimv2_model is None:
+        logger.info("Loading AIMv2 model (Apple's state-of-the-art embedding model)...")
+        try:
+            from transformers import AutoProcessor, AutoModel
+            # Use AIMv2-large for good balance of quality and speed on Apple Silicon
+            model_name = "apple/aimv2-large-patch14-224"
+            aimv2_processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+            aimv2_model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+            aimv2_model.to(device)
+            aimv2_model.eval()
+            logger.info("AIMv2 model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Failed to load AIMv2: {str(e)}")
+            return None, None
+    return aimv2_processor, aimv2_model
+
+
+def generate_image_embedding_aimv2(image: Image.Image) -> np.ndarray:
+    """
+    Generate normalized embedding vector using AIMv2 (Apple's model).
+
+    AIMv2 outperforms CLIP and SigLIP for image understanding and retrieval.
+    """
+    processor, model = get_aimv2_model()
+    if processor is None or model is None:
+        logger.warning("AIMv2 not available, falling back to SigLIP")
+        return generate_image_embedding_siglip(image)
+
+    try:
+        inputs = processor(images=image, return_tensors="pt").to(device)
+
+        with torch.no_grad():
+            outputs = model(inputs["pixel_values"])
+
+        # AIMv2 returns features that need to be extracted
+        # Use the pooled output or mean of last hidden state
+        if hasattr(outputs, 'pooler_output') and outputs.pooler_output is not None:
+            features = outputs.pooler_output
+        else:
+            # Use mean pooling of last hidden state
+            features = outputs.last_hidden_state.mean(dim=1)
+
+        # Normalize the embedding
+        embedding = features / features.norm(dim=-1, keepdim=True)
+        return embedding.cpu().numpy().flatten()
+
+    except Exception as e:
+        logger.error(f"AIMv2 embedding failed: {str(e)}, falling back to SigLIP")
+        return generate_image_embedding_siglip(image)
+
+
+def generate_image_embedding(image: Image.Image, model: str = "aimv2") -> np.ndarray:
+    """
+    Generate embedding using the specified model.
+
+    Args:
+        image: PIL Image to generate embedding for
+        model: Embedding model to use:
+            - "aimv2" (recommended - Apple's model, outperforms CLIP and SigLIP)
+            - "siglip" (Google's model, good accuracy)
+            - "clip" (OpenAI's original, fast but less accurate)
+
+    Returns:
+        Normalized embedding vector as numpy array
+    """
+    model_lower = model.lower()
+    if model_lower == "aimv2":
+        return generate_image_embedding_aimv2(image)
+    elif model_lower == "siglip":
+        return generate_image_embedding_siglip(image)
+    else:
+        return generate_image_embedding_clip(image)
 
 
 def generate_thumbnail(image_path: str, max_size: tuple = (800, 800)) -> Optional[str]:
@@ -1375,13 +2183,90 @@ def analyze_code_file(code_path: str) -> dict:
         }
 
 
-def perform_ocr(document_path: str) -> str:
+def get_paddle_ocr():
+    """Lazily initialize PaddleOCR (it's heavy to load)."""
+    global PADDLE_OCR
+    if PADDLE_OCR is None and PADDLEOCR_AVAILABLE:
+        logger.info("Initializing PaddleOCR...")
+        PADDLE_OCR = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+        logger.info("PaddleOCR initialized")
+    return PADDLE_OCR
+
+
+def perform_ocr_with_paddle(image) -> str:
+    """Perform OCR using PaddleOCR on a PIL Image."""
+    ocr = get_paddle_ocr()
+    if ocr is None:
+        return ""
+
+    # Convert PIL Image to numpy array for PaddleOCR
+    img_array = np.array(image)
+
+    # PaddleOCR returns list of results: [[box, (text, confidence)], ...]
+    result = ocr.ocr(img_array, cls=True)
+
+    if not result or not result[0]:
+        return ""
+
+    # Extract text from results
+    lines = []
+    for line in result[0]:
+        if line and len(line) >= 2:
+            text = line[1][0] if isinstance(line[1], tuple) else str(line[1])
+            lines.append(text)
+
+    return "\n".join(lines)
+
+
+def perform_ocr_with_tesseract(image) -> str:
+    """Perform OCR using Tesseract on a PIL Image."""
+    if not TESSERACT_AVAILABLE:
+        return ""
+    return pytesseract.image_to_string(image)
+
+
+def perform_ocr(document_path: str, engine: str = "auto") -> str:
     """
     Perform OCR on document (PDF or image).
     For PDFs, converts pages to images first, then performs OCR on each page.
+
+    Args:
+        document_path: Path to the document file
+        engine: OCR engine to use - "auto", "paddleocr", or "tesseract"
+                "auto" prefers PaddleOCR if available, falls back to Tesseract
     """
-    if not TESSERACT_AVAILABLE:
+    if not OCR_AVAILABLE:
+        logger.warning("No OCR engine available")
         return ""
+
+    # Determine which OCR function to use
+    if engine == "paddleocr":
+        if not PADDLEOCR_AVAILABLE:
+            logger.warning("PaddleOCR requested but not available, falling back to Tesseract")
+            ocr_func = perform_ocr_with_tesseract
+            engine_name = "Tesseract"
+        else:
+            ocr_func = perform_ocr_with_paddle
+            engine_name = "PaddleOCR"
+    elif engine == "tesseract":
+        if not TESSERACT_AVAILABLE:
+            logger.warning("Tesseract requested but not available, falling back to PaddleOCR")
+            ocr_func = perform_ocr_with_paddle
+            engine_name = "PaddleOCR"
+        else:
+            ocr_func = perform_ocr_with_tesseract
+            engine_name = "Tesseract"
+    else:  # auto - prefer PaddleOCR for better accuracy
+        if PADDLEOCR_AVAILABLE:
+            ocr_func = perform_ocr_with_paddle
+            engine_name = "PaddleOCR"
+        elif TESSERACT_AVAILABLE:
+            ocr_func = perform_ocr_with_tesseract
+            engine_name = "Tesseract"
+        else:
+            return ""
+
+    logger.info(f"Using {engine_name} for OCR")
 
     try:
         doc_path = Path(document_path)
@@ -1398,13 +2283,13 @@ def perform_ocr(document_path: str) -> str:
                 images = convert_from_path(str(document_path))
 
                 for page_num, image in enumerate(images, 1):
-                    logger.info(f"Performing OCR on page {page_num}/{len(images)}")
-                    page_text = pytesseract.image_to_string(image)
+                    logger.info(f"Performing OCR on page {page_num}/{len(images)} with {engine_name}")
+                    page_text = ocr_func(image)
                     if page_text.strip():
                         all_text.append(f"--- Page {page_num} ---\n{page_text.strip()}")
 
                 result = "\n\n".join(all_text)
-                logger.info(f"OCR completed: extracted {len(result)} characters from {len(images)} pages")
+                logger.info(f"OCR completed with {engine_name}: extracted {len(result)} characters from {len(images)} pages")
                 return result
 
             except ImportError:
@@ -1422,14 +2307,14 @@ def perform_ocr(document_path: str) -> str:
                         img_data = pix.tobytes("ppm")
                         image = Image.frombytes("RGB", [pix.width, pix.height], img_data)
 
-                        logger.info(f"Performing OCR on page {page_num + 1}/{len(doc)}")
-                        page_text = pytesseract.image_to_string(image)
+                        logger.info(f"Performing OCR on page {page_num + 1}/{len(doc)} with {engine_name}")
+                        page_text = ocr_func(image)
                         if page_text.strip():
                             all_text.append(f"--- Page {page_num + 1} ---\n{page_text.strip()}")
 
                     doc.close()
                     result = "\n\n".join(all_text)
-                    logger.info(f"OCR completed: extracted {len(result)} characters from {len(doc)} pages")
+                    logger.info(f"OCR completed with {engine_name}: extracted {len(result)} characters from {len(doc)} pages")
                     return result
 
                 except ImportError:
@@ -1438,11 +2323,10 @@ def perform_ocr(document_path: str) -> str:
 
         # Handle regular image files
         else:
-            logger.info(f"Performing OCR on image: {document_path}")
+            logger.info(f"Performing OCR on image with {engine_name}: {document_path}")
             image = Image.open(document_path)
-            text = pytesseract.image_to_string(image)
-            result = text.strip()
-            logger.info(f"OCR completed: extracted {len(result)} characters")
+            result = ocr_func(image).strip()
+            logger.info(f"OCR completed with {engine_name}: extracted {len(result)} characters")
             return result
 
     except Exception as e:
@@ -1512,12 +2396,9 @@ Respond in JSON format only: {{"document_type": "category", "confidence": 0.95}}
 
         result_text = response.get('response', '')
 
-        # Parse JSON response
-        import json
-        import re
-        json_match = re.search(r'\{[^}]+\}', result_text)
-        if json_match:
-            result = json.loads(json_match.group())
+        # Parse JSON response using robust extraction
+        result = extract_json_from_response(result_text)
+        if result:
             return {
                 "document_type": result.get("document_type", "other"),
                 "confidence": float(result.get("confidence", 0.7))
@@ -1582,15 +2463,9 @@ Respond in JSON format with actual values found (use null if not found):
 
         result_text = response.get('response', '')
 
-        # Parse JSON response
-        import json
-        import re
-        json_match = re.search(r'\{[\s\S]*\}', result_text)
-        if json_match:
-            entities = json.loads(json_match.group())
-            return entities
-
-        return {}
+        # Parse JSON response using robust extraction
+        entities = extract_json_from_response(result_text)
+        return entities if entities else {}
 
     except Exception as e:
         logger.error(f"Entity extraction failed: {str(e)}")
@@ -1808,9 +2683,6 @@ async def health_check():
 async def analyze_image(request: AnalyzeImageRequest):
     """Analyze image with CLIP embeddings and face detection."""
     try:
-        if blip_model is None or clip_model is None:
-            raise HTTPException(status_code=503, detail="Models not loaded yet")
-
         image_path = Path(request.image_path)
         if not image_path.exists():
             raise HTTPException(status_code=404, detail=f"Image not found: {request.image_path}")
@@ -1818,6 +2690,7 @@ async def analyze_image(request: AnalyzeImageRequest):
         logger.info(f"Analyzing image: {request.image_path}")
 
         # Check if file is SVG (vector graphic - handle as text, not raster image)
+        # IMPORTANT: SVG check MUST come BEFORE model validation since SVG files don't need models
         is_svg = (
             image_path.suffix.lower() == '.svg' or
             image_path.name.lower().endswith('.svg')
@@ -1856,13 +2729,19 @@ async def analyze_image(request: AnalyzeImageRequest):
                 logger.error(f"Error processing SVG file: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Failed to process SVG: {str(e)}")
 
+        # Model validation for raster images (after SVG check since SVG doesn't need models)
+        if blip_model is None or clip_model is None:
+            raise HTTPException(status_code=503, detail="Models not loaded yet")
+
         image = Image.open(image_path).convert("RGB")
 
-        # Generate caption
-        caption = generate_caption_blip(image)
+        # Generate caption using selected model
+        logger.info(f"Generating caption with model: {request.captioning_model}")
+        caption = generate_caption(image, model=request.captioning_model)
 
-        # Generate embedding
-        embedding = generate_image_embedding(image)
+        # Generate embedding using selected model
+        logger.info(f"Generating embedding with model: {request.embedding_model}")
+        embedding = generate_image_embedding(image, model=request.embedding_model)
 
         # Detect faces
         face_info = {"count": 0, "locations": [], "encodings": []}
@@ -1873,21 +2752,169 @@ async def analyze_image(request: AnalyzeImageRequest):
         # This converts HEIC and other formats to JPEG for web display
         thumbnail_path = generate_thumbnail(str(image_path))
 
+        # ============================================================
+        # Maximum Analysis Coverage Features
+        # ============================================================
+
+        # Object detection via Florence-2 <OD> task (zero additional memory)
+        objects_detected = None
+        if request.detect_objects:
+            logger.info("Running object detection with Florence-2 <OD>")
+            objects_detected = detect_objects_florence(image)
+
+        # Dominant color extraction via K-means clustering
+        dominant_colors = None
+        if request.extract_colors:
+            logger.info("Extracting dominant colors")
+            dominant_colors = extract_dominant_colors(image)
+
+        # Image quality analysis via OpenCV
+        image_quality = None
+        quality_tier = None
+        if request.analyze_quality:
+            logger.info("Analyzing image quality")
+            image_quality = analyze_image_quality(image)
+            quality_tier = image_quality.get("quality_tier")
+
+        # Perceptual hashing for duplicate detection
+        phash = None
+        dhash = None
+        if request.compute_hashes:
+            logger.info("Computing perceptual hashes")
+            hashes = compute_perceptual_hashes(image)
+            phash = hashes.get("phash")
+            dhash = hashes.get("dhash")
+
+        # Scene classification via Ollama (only if Ollama is enabled)
+        scene_classification = None
+        if request.classify_scene and request.use_ollama:
+            logger.info(f"Classifying scene with Ollama ({request.ollama_model})")
+            scene_classification = classify_scene_ollama(image, request.ollama_model)
+
+        # Use Florence-2 OD labels for better semantic tags (e.g., "boat", "building")
+        # instead of extract_keywords which just splits caption words ("there", "many")
+        od_labels = objects_detected.get('labels', []) if objects_detected else []
+        meta_tags = od_labels if od_labels else extract_keywords(caption)
+
         return AnalyzeImageResponse(
             description=caption,
             detailed_description=caption,
-            meta_tags=extract_keywords(caption),
+            meta_tags=meta_tags,
             embedding=embedding.tolist(),
             faces_detected=face_info["count"],
             face_locations=face_info["locations"],
             face_encodings=face_info["encodings"],
-            thumbnail_path=thumbnail_path
+            thumbnail_path=thumbnail_path,
+            # Maximum analysis coverage fields
+            objects_detected=objects_detected,
+            scene_classification=scene_classification,
+            dominant_colors=dominant_colors,
+            image_quality=image_quality,
+            quality_tier=quality_tier,
+            phash=phash,
+            dhash=dhash
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error analyzing image: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analyze-comprehensive", response_model=AnalyzeImageComprehensiveResponse)
+async def analyze_image_comprehensive(request: AnalyzeImageComprehensiveRequest):
+    """
+    Comprehensive 4-pass VLM image analysis for maximum insight extraction.
+
+    Pass 1: Content & Scene Analysis (subjects, objects, setting, composition)
+    Pass 2: People & Emotion Analysis (demographics, emotions, interactions)
+    Pass 3: Quality & Technical Analysis (focus, exposure, lighting, color)
+    Pass 4: Context & Metadata Generation (tags, albums, keywords, occasion)
+
+    Modes:
+    - comprehensive: 4-pass analysis (~40-60 seconds per image)
+    - quick: Single-pass analysis (~8 seconds per image)
+    """
+    try:
+        # Check prerequisites
+        if not OLLAMA_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Ollama not available - required for comprehensive analysis")
+
+        if not COMPREHENSIVE_ANALYZER_AVAILABLE:
+            raise HTTPException(status_code=503, detail="ComprehensiveImageAnalyzer not available")
+
+        image_path = Path(request.image_path)
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail=f"Image not found: {request.image_path}")
+
+        logger.info(f"Comprehensive analysis starting: {request.image_path} (mode={request.analysis_mode})")
+
+        # Load image
+        image = Image.open(image_path).convert("RGB")
+
+        # Build image metadata for context
+        image_metadata = {
+            "width": image.width,
+            "height": image.height,
+            "path": str(image_path),
+            "filename": image_path.name,
+        }
+
+        # Create analyzer with appropriate mode
+        quick_mode = request.analysis_mode == "quick"
+        analyzer = create_analyzer(
+            ollama_client=ollama_client,
+            ollama_model=request.ollama_model,
+            quick_mode=quick_mode,
+        )
+
+        # Run comprehensive analysis
+        result = analyzer.analyze(image, image_metadata)
+
+        # Generate embedding if requested
+        embedding = None
+        if request.generate_embedding:
+            logger.info(f"Generating embedding with model: {request.embedding_model}")
+            embedding_array = generate_image_embedding(image, model=request.embedding_model)
+            embedding = embedding_array.tolist() if embedding_array is not None else None
+
+        # Detect faces if requested
+        face_info = {"count": 0, "locations": [], "encodings": []}
+        if request.detect_faces:
+            face_info = detect_faces(image)
+
+        # Generate thumbnail
+        thumbnail_path = generate_thumbnail(str(image_path))
+
+        logger.info(
+            f"Comprehensive analysis completed: {result.passes_completed}/{result.passes_completed + result.passes_failed} passes "
+            f"in {result.total_duration_seconds:.2f}s"
+        )
+
+        return AnalyzeImageComprehensiveResponse(
+            success=result.success,
+            analysis_mode=request.analysis_mode,
+            content_analysis=result.content if result.content else None,
+            people_analysis=result.people if result.people else None,
+            quality_analysis=result.quality if result.quality else None,
+            context_analysis=result.context if result.context else None,
+            combined_analysis=result.combined if result.combined else None,
+            passes_completed=result.passes_completed,
+            passes_failed=result.passes_failed,
+            analysis_duration_seconds=result.total_duration_seconds,
+            errors=result.errors,
+            embedding=embedding,
+            faces_detected=face_info["count"],
+            face_locations=face_info["locations"],
+            face_encodings=face_info["encodings"],
+            thumbnail_path=thumbnail_path,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in comprehensive analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2057,14 +3084,14 @@ async def analyze_document(request: AnalyzeDocumentRequest):
             extracted_text = extract_pdf_text(str(doc_path))
 
             # If no text extracted and OCR is requested, perform OCR
-            if not extracted_text.strip() and request.perform_ocr and TESSERACT_AVAILABLE:
-                logger.info("No native text found in PDF, performing OCR...")
-                extracted_text = perform_ocr(str(doc_path))
+            if not extracted_text.strip() and request.perform_ocr and OCR_AVAILABLE:
+                logger.info(f"No native text found in PDF, performing OCR with engine: {request.ocr_engine}")
+                extracted_text = perform_ocr(str(doc_path), engine=request.ocr_engine)
 
         # Image documents - perform OCR if requested
-        elif request.perform_ocr and TESSERACT_AVAILABLE:
-            logger.info(f"Performing OCR on image document: {file_extension}")
-            extracted_text = perform_ocr(str(doc_path))
+        elif request.perform_ocr and OCR_AVAILABLE:
+            logger.info(f"Performing OCR on image document: {file_extension} with engine: {request.ocr_engine}")
+            extracted_text = perform_ocr(str(doc_path), engine=request.ocr_engine)
 
         else:
             logger.warning(f"Unsupported document type for text extraction: {file_extension}")

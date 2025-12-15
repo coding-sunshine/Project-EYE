@@ -177,8 +177,8 @@ class AiService
     public function preloadModels(): bool
     {
         try {
-            $captioningModel = Setting::get('captioning_model', 'Salesforce/blip-image-captioning-large');
-            $embeddingModel = Setting::get('embedding_model', 'laion/CLIP-ViT-B-32-laion2B-s34B-b79K');
+            $captioningModel = Setting::get('captioning_model', 'florence');
+            $embeddingModel = Setting::get('embedding_model', 'aimv2');
 
             $timeout = $this->getTimeoutFor('preload');
             $response = Http::timeout($timeout)->post($this->baseUrl . '/api/preload-models', [
@@ -214,9 +214,9 @@ class AiService
             $sharedPath = $this->fileService->convertToSharedPath($imagePath);
             
             // Get model settings
-            $captioningModel = Setting::get('captioning_model', 'Salesforce/blip-image-captioning-large');
-            $embeddingModel = Setting::get('embedding_model', 'laion/CLIP-ViT-B-32-laion2B-s34B-b79K');
-            
+            $captioningModel = Setting::get('captioning_model', 'florence');
+            $embeddingModel = Setting::get('embedding_model', 'aimv2');
+
             // Handle boolean settings (could be boolean or string)
             $faceDetectionRaw = Setting::get('face_detection_enabled', true);
             $faceDetectionEnabled = is_bool($faceDetectionRaw) ? $faceDetectionRaw : ($faceDetectionRaw === 'true' || $faceDetectionRaw === true);
@@ -224,7 +224,7 @@ class AiService
             $ollamaEnabledRaw = Setting::get('ollama_enabled', false);
             $ollamaEnabled = is_bool($ollamaEnabledRaw) ? $ollamaEnabledRaw : ($ollamaEnabledRaw === 'true' || $ollamaEnabledRaw === true);
 
-            $ollamaModel = Setting::get('ollama_model', 'llava');
+            $ollamaModel = Setting::get('ollama_model', 'llava:13b-v1.6');
 
             // Get adaptive timeout based on whether Ollama is enabled
             $timeout = $this->getTimeoutFor('image', $ollamaEnabled);
@@ -243,14 +243,10 @@ class AiService
                 'image_path' => $sharedPath,
                 'captioning_model' => $captioningModel,
                 'embedding_model' => $embeddingModel,
-                'face_detection_enabled' => $faceDetectionEnabled,
+                'detect_faces' => $faceDetectionEnabled,
+                'use_ollama' => $ollamaEnabled,
+                'ollama_model' => $ollamaModel,
             ];
-            
-            // Add Ollama settings if enabled
-            if ($ollamaEnabled) {
-                $requestData['ollama_enabled'] = true;
-                $requestData['ollama_model'] = $ollamaModel;
-            }
 
             // Wrap HTTP request with retry and circuit breaker protection
             $data = $this->retryService->execute(function () use ($timeout, $requestData) {
@@ -301,6 +297,14 @@ class AiService
                 'faces' => $data['faces'] ?? [],  // New: detailed face data with locations
                 'thumbnail_path' => $thumbnail_path,
                 'extracted_text' => $data['extracted_text'] ?? '',  // For SVG and other text-based formats
+                // Maximum analysis coverage fields
+                'objects_detected' => $data['objects_detected'] ?? null,
+                'scene_classification' => $data['scene_classification'] ?? null,
+                'dominant_colors' => $data['dominant_colors'] ?? null,
+                'image_quality' => $data['image_quality'] ?? null,
+                'quality_tier' => $data['quality_tier'] ?? null,
+                'phash' => $data['phash'] ?? null,
+                'dhash' => $data['dhash'] ?? null,
             ];
 
             // Cache the result for 24 hours
@@ -327,7 +331,7 @@ class AiService
     {
         try {
             // Get embedding model setting
-            $embeddingModel = Setting::get('embedding_model', 'laion/CLIP-ViT-B-32-laion2B-s34B-b79K');
+            $embeddingModel = Setting::get('embedding_model', 'aimv2');
 
             // Get adaptive timeout for embedding
             $timeout = $this->getTimeoutFor('embedding');
@@ -476,6 +480,9 @@ class AiService
 
             $ollamaModel = Setting::get('ollama_model_document', Setting::get('ollama_model', 'llama3.2'));
 
+            // Get OCR engine setting (auto, paddleocr, tesseract)
+            $ocrEngine = Setting::get('ocr_engine', 'auto');
+
             // Get adaptive timeout based on whether Ollama is enabled
             $timeout = $this->getTimeoutFor('document', $ollamaEnabled);
 
@@ -483,6 +490,7 @@ class AiService
                 'original_path' => $documentPath,
                 'shared_path' => $sharedPath,
                 'perform_ocr' => $performOcr,
+                'ocr_engine' => $ocrEngine,
                 'ollama_enabled' => $ollamaEnabled,
                 'ollama_model' => $ollamaModel,
             ]);
@@ -490,6 +498,7 @@ class AiService
             $requestData = [
                 'document_path' => $sharedPath,
                 'perform_ocr' => $performOcr,
+                'ocr_engine' => $ocrEngine,
             ];
 
             // Add Ollama settings

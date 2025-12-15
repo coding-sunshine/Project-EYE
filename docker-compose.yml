@@ -75,12 +75,12 @@ services:
             echo "📥 Checking/pulling required models..."
             sleep 5  # Give Ollama a moment to fully initialize
             
-            # Check if llama3.2 exists
-            if ! /usr/bin/ollama list 2>/dev/null | grep -q "llama3.2"; then
-              echo "⬇️  Pulling Llama 3.2 model..."
-              /usr/bin/ollama pull llama3.2 2>&1 | grep -E "(pulling|success|already)" || true
+            # Check if llava:13b-v1.6 exists (vision model for scene classification)
+            if ! /usr/bin/ollama list 2>/dev/null | grep -q "llava"; then
+              echo "⬇️  Pulling LLaVA 1.6 13B vision model (~8GB, may take a few minutes)..."
+              /usr/bin/ollama pull llava:13b-v1.6 2>&1 | grep -E "(pulling|success|already)" || true
             else
-              echo "✅ Llama 3.2 model already available"
+              echo "✅ LLaVA vision model already available"
             fi
             
             echo "🎉 All models ready!"
