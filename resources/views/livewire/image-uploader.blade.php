@@ -2,10 +2,10 @@
     <!-- Upload Header -->
     <div style="margin-bottom: 2rem;">
         <h1 style="font-size: 1.5rem; font-weight: 500; color: #202124; margin-bottom: 0.5rem;">
-            Upload photos
+            Upload Files
         </h1>
         <p style="font-size: 0.875rem; color: var(--secondary-color);">
-            Upload multiple images to analyze with AI. Each image will be automatically analyzed for descriptions and searchable embeddings.
+            Upload images, videos, documents, audio files, and archives. Files will be automatically analyzed with AI for descriptions and searchable embeddings.
         </p>
     </div>
 
@@ -43,37 +43,36 @@
     <div class="card">
         <form wire:submit.prevent="processImages">
             <!-- File Upload Area -->
-            <label for="images" class="file-upload-area" style="position: relative; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <label for="files" class="file-upload-area" style="position: relative; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
                 <!-- Normal State -->
-                <span wire:loading.remove wire:target="images" class="material-symbols-outlined" style="font-size: 4rem; color: var(--primary-color); margin-bottom: 1rem;">
-                    @if (!empty($images))
+                <span wire:loading.remove wire:target="files" class="material-symbols-outlined" style="font-size: 4rem; color: var(--primary-color); margin-bottom: 1rem;">
+                    @if (!empty($files))
                         check_circle
                     @else
                         cloud_upload
                     @endif
                 </span>
-                <div wire:loading.remove wire:target="images" style="font-size: 1.125rem; font-weight: 500; margin-bottom: 0.5rem; color: #202124;">
-                    @if (!empty($images))
-                        {{ count($images) }} {{ Str::plural('file', count($images)) }} selected
+                <div wire:loading.remove wire:target="files" style="font-size: 1.125rem; font-weight: 500; margin-bottom: 0.5rem; color: #202124;">
+                    @if (!empty($files))
+                        {{ count($files) }} {{ Str::plural('file', count($files)) }} selected
                     @else
                         Click to upload or drag and drop
                     @endif
                 </div>
-                <div wire:loading.remove wire:target="images" style="color: var(--secondary-color); font-size: 0.875rem;">
-                    PNG, JPG, GIF, WEBP up to 10MB each
+                <div wire:loading.remove wire:target="files" style="color: var(--secondary-color); font-size: 0.875rem;">
+                    Supports images, videos, documents, audio & archives (up to 500MB each)
                 </div>
 
                 <!-- Loading State -->
-                <div wire:loading wire:target="images" class="spinner"></div>
-                <div wire:loading wire:target="images" style="font-size: 1rem; color: var(--secondary-color); margin-top: 1rem;">Loading files...</div>
+                <div wire:loading wire:target="files" class="spinner"></div>
+                <div wire:loading wire:target="files" style="font-size: 1rem; color: var(--secondary-color); margin-top: 1rem;">Loading files...</div>
             </label>
 
             <input
                 type="file"
-                id="images"
-                wire:model="images"
+                id="files"
+                wire:model="files"
                 multiple
-                accept="image/jpeg,image/png,image/jpg,image/gif,image/webp"
                 style="display: none;"
             >
 
@@ -84,14 +83,14 @@
                     class="btn btn-primary"
                     style="flex: 1;"
                     wire:loading.attr="disabled"
-                    wire:target="images,processImages"
-                    @disabled($processing || empty($images))
+                    wire:target="files,processImages"
+                    @disabled($processing || empty($files))
                 >
                     <span wire:loading.remove wire:target="processImages" class="material-symbols-outlined" style="font-size: 1.125rem;">
                         psychology
                     </span>
                     <span wire:loading wire:target="processImages" class="spinner" style="width: 20px; height: 20px; margin: 0;"></span>
-                    <span wire:loading.remove wire:target="processImages">Analyze images</span>
+                    <span wire:loading.remove wire:target="processImages">Analyze files</span>
                     <span wire:loading wire:target="processImages">Processing...</span>
                 </button>
 
@@ -113,7 +112,7 @@
         @if ($processing && $progress['total'] > 0)
             <div style="margin-top: 2rem; padding: 1.5rem; background: var(--hover-bg); border-radius: 8px;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem;">
-                    <span style="font-weight: 500; color: #202124;">Processing images...</span>
+                    <span style="font-weight: 500; color: #202124;">Processing files...</span>
                     <span style="color: var(--primary-color); font-weight: 500;">{{ $progress['current'] }} / {{ $progress['total'] }}</span>
                 </div>
                 <div style="width: 100%; height: 8px; background: white; border-radius: 10px; overflow: hidden;">
@@ -133,7 +132,7 @@
             <div>
                 <strong>Success!</strong>
                 <div style="font-size: 0.875rem; margin-top: 0.25rem;">
-                    Successfully processed {{ count($results) }} {{ Str::plural('image', count($results)) }}
+                    Successfully processed {{ count($results) }} {{ Str::plural('file', count($results)) }}
                 </div>
             </div>
         </div>
@@ -150,17 +149,17 @@
         </div>
 
         <!-- Results Grid -->
-        <div class="photos-grid">
+        <div class="media-grid">
             @foreach ($results as $result)
-                <div class="photo-item">
+                <div class="media-item">
                     <img src="{{ $result['url'] }}" alt="{{ $result['filename'] }}" loading="lazy">
-                    
+
                     <!-- Hover Overlay -->
-                    <div class="photo-overlay">
-                        <div class="photo-overlay-title">
+                    <div class="media-overlay">
+                        <div class="media-overlay-title">
                             {{ Str::limit($result['description'], 60) }}
                         </div>
-                        <div class="photo-overlay-meta" style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div class="media-overlay-meta" style="display: flex; align-items: center; gap: 0.5rem;">
                             <span style="display: inline-flex; align-items: center; gap: 0.25rem; background: rgba(16, 185, 129, 0.2); padding: 0.25rem 0.5rem; border-radius: 12px;">
                                 <span class="material-symbols-outlined" style="font-size: 0.875rem;">check_circle</span>
                                 Analyzed

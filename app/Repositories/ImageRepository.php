@@ -2,7 +2,7 @@
 
 namespace App\Repositories;
 
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use Illuminate\Support\Collection;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -19,11 +19,11 @@ class ImageRepository
      *
      * @param int $id
      * @param bool $withTrashed
-     * @return ImageFile|null
+     * @return MediaFile|null
      */
-    public function findById(int $id, bool $withTrashed = false): ?ImageFile
+    public function findById(int $id, bool $withTrashed = false): ?MediaFile
     {
-        $query = $withTrashed ? ImageFile::withTrashed() : ImageFile::query();
+        $query = $withTrashed ? MediaFile::withTrashed() : MediaFile::query();
         return $query->find($id);
     }
 
@@ -36,7 +36,7 @@ class ImageRepository
      */
     public function findByIds(array $ids, bool $withTrashed = false): Collection
     {
-        $query = $withTrashed ? ImageFile::withTrashed() : ImageFile::query();
+        $query = $withTrashed ? MediaFile::withTrashed() : MediaFile::query();
         return $query->whereIn('id', $ids)->get();
     }
 
@@ -48,7 +48,7 @@ class ImageRepository
      */
     public function getAll(array $filters = []): Collection
     {
-        $query = ImageFile::query();
+        $query = MediaFile::query();
         
         $this->applyFilters($query, $filters);
         $this->applySorting($query, $filters);
@@ -65,7 +65,7 @@ class ImageRepository
      */
     public function paginate(int $perPage = 30, array $filters = [])
     {
-        $query = ImageFile::query();
+        $query = MediaFile::query();
         
         $this->applyFilters($query, $filters);
         $this->applySorting($query, $filters);
@@ -81,7 +81,7 @@ class ImageRepository
      */
     public function count(array $filters = []): int
     {
-        $query = ImageFile::query();
+        $query = MediaFile::query();
         $this->applyFilters($query, $filters);
         return $query->count();
     }
@@ -95,7 +95,7 @@ class ImageRepository
      */
     public function getByStatus(string $status, ?int $limit = null): Collection
     {
-        $query = ImageFile::where('processing_status', $status);
+        $query = MediaFile::where('processing_status', $status);
         
         if ($limit) {
             $query->limit($limit);
@@ -112,7 +112,7 @@ class ImageRepository
      */
     public function getPendingImages(int $limit = 10): Collection
     {
-        return ImageFile::where('processing_status', 'pending')
+        return MediaFile::where('processing_status', 'pending')
             ->whereNull('processing_started_at')
             ->orderBy('created_at', 'asc')
             ->limit($limit)
@@ -126,7 +126,7 @@ class ImageRepository
      */
     public function getFailedImages(): Collection
     {
-        return ImageFile::where('processing_status', 'failed')
+        return MediaFile::where('processing_status', 'failed')
             ->orderBy('created_at', 'desc')
             ->get();
     }
@@ -138,7 +138,7 @@ class ImageRepository
      */
     public function getFavorites(): Collection
     {
-        return ImageFile::where('is_favorite', true)
+        return MediaFile::where('is_favorite', true)
             ->orderByRaw('COALESCE(date_taken, created_at) desc')
             ->get();
     }
@@ -150,7 +150,7 @@ class ImageRepository
      */
     public function getTrashed(): Collection
     {
-        return ImageFile::onlyTrashed()
+        return MediaFile::onlyTrashed()
             ->orderBy('deleted_at', 'desc')
             ->get();
     }
@@ -163,7 +163,7 @@ class ImageRepository
      */
     public function getByTag(string $tag): Collection
     {
-        return ImageFile::whereJsonContains('meta_tags', $tag)
+        return MediaFile::whereJsonContains('meta_tags', $tag)
             ->orderByRaw('COALESCE(date_taken, created_at) desc')
             ->get();
     }
@@ -176,7 +176,7 @@ class ImageRepository
      */
     public function getRecentlyViewed(int $limit = 20): Collection
     {
-        return ImageFile::whereNotNull('last_viewed_at')
+        return MediaFile::whereNotNull('last_viewed_at')
             ->orderBy('last_viewed_at', 'desc')
             ->limit($limit)
             ->get();
@@ -191,7 +191,7 @@ class ImageRepository
      */
     public function searchByText(string $query, int $limit = 30): Collection
     {
-        return ImageFile::where('processing_status', 'completed')
+        return MediaFile::where('processing_status', 'completed')
             ->whereNull('deleted_at')
             ->where(function ($q) use ($query) {
                 $q->where('description', 'ilike', '%' . $query . '%')
@@ -210,7 +210,7 @@ class ImageRepository
      */
     public function getImagesWithFaces(): Collection
     {
-        return ImageFile::where('face_count', '>', 0)
+        return MediaFile::where('face_count', '>', 0)
             ->whereNotNull('face_encodings')
             ->orderByRaw('COALESCE(date_taken, created_at) desc')
             ->get();
@@ -225,7 +225,7 @@ class ImageRepository
      */
     public function getByDateRange($startDate, $endDate): Collection
     {
-        return ImageFile::whereBetween('date_taken', [$startDate, $endDate])
+        return MediaFile::whereBetween('date_taken', [$startDate, $endDate])
             ->orWhereBetween('created_at', [$startDate, $endDate])
             ->orderByRaw('COALESCE(date_taken, created_at) desc')
             ->get();
@@ -240,7 +240,7 @@ class ImageRepository
      */
     public function getByCamera(string $cameraMake, ?string $cameraModel = null): Collection
     {
-        $query = ImageFile::where('camera_make', $cameraMake);
+        $query = MediaFile::where('camera_make', $cameraMake);
         
         if ($cameraModel) {
             $query->where('camera_model', $cameraModel);
@@ -256,7 +256,7 @@ class ImageRepository
      */
     public function getImagesWithGps(): Collection
     {
-        return ImageFile::whereNotNull('gps_latitude')
+        return MediaFile::whereNotNull('gps_latitude')
             ->whereNotNull('gps_longitude')
             ->orderByRaw('COALESCE(date_taken, created_at) desc')
             ->get();
@@ -269,7 +269,7 @@ class ImageRepository
      */
     public function getAllTags(): array
     {
-        $images = ImageFile::whereNotNull('meta_tags')->get();
+        $images = MediaFile::whereNotNull('meta_tags')->get();
         $tags = [];
         
         foreach ($images as $image) {
@@ -288,7 +288,7 @@ class ImageRepository
      */
     public function getAllCameraMakes(): Collection
     {
-        return ImageFile::whereNotNull('camera_make')
+        return MediaFile::whereNotNull('camera_make')
             ->distinct()
             ->pluck('camera_make');
     }
@@ -301,15 +301,15 @@ class ImageRepository
     public function getStatistics(): array
     {
         return [
-            'total' => ImageFile::count(),
-            'favorites' => ImageFile::where('is_favorite', true)->count(),
-            'trashed' => ImageFile::onlyTrashed()->count(),
-            'completed' => ImageFile::where('processing_status', 'completed')->count(),
-            'pending' => ImageFile::where('processing_status', 'pending')->count(),
-            'processing' => ImageFile::where('processing_status', 'processing')->count(),
-            'failed' => ImageFile::where('processing_status', 'failed')->count(),
-            'with_faces' => ImageFile::where('face_count', '>', 0)->count(),
-            'with_gps' => ImageFile::whereNotNull('gps_latitude')->whereNotNull('gps_longitude')->count(),
+            'total' => MediaFile::count(),
+            'favorites' => MediaFile::where('is_favorite', true)->count(),
+            'trashed' => MediaFile::onlyTrashed()->count(),
+            'completed' => MediaFile::where('processing_status', 'completed')->count(),
+            'pending' => MediaFile::where('processing_status', 'pending')->count(),
+            'processing' => MediaFile::where('processing_status', 'processing')->count(),
+            'failed' => MediaFile::where('processing_status', 'failed')->count(),
+            'with_faces' => MediaFile::where('face_count', '>', 0)->count(),
+            'with_gps' => MediaFile::whereNotNull('gps_latitude')->whereNotNull('gps_longitude')->count(),
         ];
     }
 
@@ -387,11 +387,11 @@ class ImageRepository
      * Create a new image record.
      *
      * @param array $data
-     * @return ImageFile
+     * @return MediaFile
      */
-    public function create(array $data): ImageFile
+    public function create(array $data): MediaFile
     {
-        return ImageFile::create($data);
+        return MediaFile::create($data);
     }
 
     /**
@@ -454,7 +454,7 @@ class ImageRepository
      */
     public function restore(int $id): bool
     {
-        $image = ImageFile::withTrashed()->find($id);
+        $image = MediaFile::withTrashed()->find($id);
         
         if (!$image || !$image->trashed()) {
             return false;

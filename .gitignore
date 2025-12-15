@@ -38,3 +38,8 @@ venv/
 .DS_Store
 Thumbs.db
 .claude/*.*
+
+# Test files
+test_database.sql
+test_image.svg
+organyz/

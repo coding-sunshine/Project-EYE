@@ -25,17 +25,17 @@ return new class extends Migration
             $table->index('type');
         });
         
-        // Detected faces in images
+        // Detected faces in media (images/videos)
         Schema::create('detected_faces', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('image_file_id')->constrained()->onDelete('cascade');
+            $table->foreignId('media_file_id')->constrained()->onDelete('cascade');
             $table->foreignId('face_cluster_id')->nullable()->constrained()->onDelete('set null');
             $table->json('face_encoding'); // 128-d face encoding
             $table->json('face_location')->nullable(); // [top, right, bottom, left]
             $table->float('confidence')->default(1.0);
             $table->timestamps();
-            
-            $table->index('image_file_id');
+
+            $table->index('media_file_id');
             $table->index('face_cluster_id');
         });
     }

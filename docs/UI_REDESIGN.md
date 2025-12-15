@@ -94,7 +94,7 @@ Your Avinash-EYE application now has a **stunning Google Photos-inspired interfa
 
 ### Masonry Grid
 ```css
-.photos-grid {
+.media-grid {
     columns: 5 250px;        /* 5 columns, min 250px each */
     column-gap: 4px;
     row-gap: 4px;

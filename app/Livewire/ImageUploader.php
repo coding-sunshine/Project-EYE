@@ -6,6 +6,7 @@ use Livewire\Component;
 use Livewire\WithFileUploads;
 use App\Models\ImageFile;
 use App\Services\AiService;
+use App\Services\MediaFileService;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use Exception;
@@ -15,11 +16,11 @@ class ImageUploader extends Component
     use WithFileUploads;
 
     /**
-     * Uploaded images.
+     * Uploaded files.
      *
      * @var array
      */
-    public $images = [];
+    public $files = [];
 
     /**
      * Processing status.
@@ -61,14 +62,14 @@ class ImageUploader extends Component
     protected function rules(): array
     {
         return [
-            'images.*' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB max
+            'files.*' => 'required|file|max:512000', // 500MB max - accept all file types
         ];
     }
 
     /**
-     * Updated images property.
+     * Updated files property.
      */
-    public function updatedImages()
+    public function updatedFiles()
     {
         $this->validate();
     }
@@ -80,8 +81,8 @@ class ImageUploader extends Component
     {
         $this->validate();
 
-        if (empty($this->images)) {
-            $this->addError('images', 'Please select at least one image.');
+        if (empty($this->files)) {
+            $this->addError('files', 'Please select at least one file.');
             return;
         }
 
@@ -90,11 +91,12 @@ class ImageUploader extends Component
         $this->errors_list = [];
         $this->progress = [
             'current' => 0,
-            'total' => count($this->images),
+            'total' => count($this->files),
             'percentage' => 0
         ];
 
         $aiService = app(AiService::class);
+        $mediaFileService = app(MediaFileService::class);
 
         // Check AI service health
         if (!$aiService->isHealthy()) {
@@ -103,50 +105,67 @@ class ImageUploader extends Component
             return;
         }
 
-        foreach ($this->images as $index => $image) {
+        foreach ($this->files as $index => $image) {
             try {
-                // Store the image
-                $path = $image->store('public/images');
-                $fullPath = Storage::path($path);
+                // Store the file with proper media type detection
+                $fileData = $mediaFileService->storeUploadedMedia($image);
+                $mediaType = $fileData['media_type'];
 
-                Log::info('Processing uploaded image', [
-                    'path' => $path,
-                    'full_path' => $fullPath
+                Log::info('Processing uploaded media file', [
+                    'path' => $fileData['path'],
+                    'full_path' => $fileData['full_path'],
+                    'media_type' => $mediaType
                 ]);
 
                 // Extract metadata
-                $metadata = $this->extractMetadata($fullPath, $image);
+                $metadata = $this->extractMetadata($fileData['full_path'], $image);
 
-                // Analyze image with AI service
-                $analysis = $aiService->analyzeImage($path);
+                // Analyze based on media type
+                $analysis = match($mediaType) {
+                    'image' => $aiService->analyzeImage($fileData['path']),
+                    'video' => $aiService->analyzeVideo($fileData['path']),
+                    'document' => $aiService->analyzeDocument($fileData['path']),
+                    'audio' => $aiService->transcribeAudio($fileData['path']),
+                    default => [
+                        'description' => 'File: ' . $image->getClientOriginalName(),
+                        'detailed_description' => null,
+                        'meta_tags' => [],
+                        'embedding' => null,
+                        'face_count' => 0,
+                        'face_encodings' => [],
+                    ],
+                };
 
-                // Merge metadata with analysis
-                $imageData = array_merge($metadata, [
-                    'file_path' => $path,
+                // Create media file record with correct model class
+                $mediaFile = $mediaFileService->createMediaFileRecord($fileData, $image);
+
+                // Update with metadata and analysis
+                $mediaFile->update(array_merge($metadata, [
                     'description' => $analysis['description'],
                     'detailed_description' => $analysis['detailed_description'] ?? null,
                     'meta_tags' => $analysis['meta_tags'] ?? [],
                     'face_count' => $analysis['face_count'] ?? 0,
                     'face_encodings' => $analysis['face_encodings'] ?? [],
-                    'embedding' => $analysis['embedding'],
-                ]);
-
-                // Save to database
-                $imageFile = ImageFile::create($imageData);
+                    'embedding' => $analysis['embedding'] ?? null,
+                    'thumbnail_path' => $analysis['thumbnail_path'] ?? null,
+                    'processing_status' => 'completed',
+                ]));
 
                 // Add to results
                 $this->results[] = [
-                    'id' => $imageFile->id,
+                    'id' => $mediaFile->id,
                     'filename' => $image->getClientOriginalName(),
-                    'path' => $path,
-                    'url' => Storage::url($path),
+                    'path' => $fileData['path'],
+                    'url' => $mediaFileService->getPublicUrl($fileData['path']),
                     'description' => $analysis['description'],
+                    'media_type' => $mediaType,
                     'success' => true
                 ];
 
-                Log::info('Image processed successfully', [
-                    'id' => $imageFile->id,
-                    'filename' => $image->getClientOriginalName()
+                Log::info('Media file processed successfully', [
+                    'id' => $mediaFile->id,
+                    'filename' => $image->getClientOriginalName(),
+                    'media_type' => $mediaType
                 ]);
 
             } catch (Exception $e) {
@@ -167,9 +186,9 @@ class ImageUploader extends Component
         }
 
         $this->processing = false;
-        
-        // Clear images after processing
-        $this->images = [];
+
+        // Clear files after processing
+        $this->files = [];
     }
 
     /**
@@ -327,7 +346,7 @@ class ImageUploader extends Component
      */
     public function clear()
     {
-        $this->reset(['images', 'results', 'errors_list', 'progress']);
+        $this->reset(['files', 'results', 'errors_list', 'progress']);
     }
 
     /**

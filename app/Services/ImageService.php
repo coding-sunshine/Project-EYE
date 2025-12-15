@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
@@ -28,14 +28,15 @@ class ImageService
     /**
      * Transform image model to array for display.
      *
-     * @param ImageFile $image
+     * @param MediaFile $image
      * @return array
      */
-    public function transformForDisplay(ImageFile $image): array
+    public function transformForDisplay(MediaFile $image): array
     {
         return [
             'id' => $image->id,
-            'url' => $this->getImageUrl($image->file_path),
+            'media_type' => $image->media_type,
+            'url' => $image->file_url, // Use model accessor for correct thumbnail handling
             'description' => $image->description,
             'detailed_description' => $image->detailed_description ?? $image->description,
             'meta_tags' => $image->meta_tags ?? [],
@@ -95,10 +96,10 @@ class ImageService
     /**
      * Get display date (prefer date_taken over created_at).
      *
-     * @param ImageFile $image
+     * @param MediaFile $image
      * @return string
      */
-    protected function getDisplayDate(ImageFile $image): string
+    protected function getDisplayDate(MediaFile $image): string
     {
         if ($image->date_taken) {
             return $image->date_taken->format('M d, Y');
@@ -129,7 +130,7 @@ class ImageService
      */
     public function incrementViewCount(int $imageId): void
     {
-        ImageFile::where('id', $imageId)->update([
+        MediaFile::where('id', $imageId)->update([
             'view_count' => \DB::raw('view_count + 1'),
             'last_viewed_at' => now(),
         ]);
@@ -143,7 +144,7 @@ class ImageService
      */
     public function toggleFavorite(int $imageId): bool
     {
-        $image = ImageFile::withTrashed()->find($imageId);
+        $image = MediaFile::withTrashed()->find($imageId);
         
         if (!$image) {
             return false;
@@ -163,7 +164,7 @@ class ImageService
      */
     public function deleteImage(int $imageId): bool
     {
-        $image = ImageFile::find($imageId);
+        $image = MediaFile::find($imageId);
         
         if (!$image) {
             return false;
@@ -180,7 +181,7 @@ class ImageService
      */
     public function restoreImage(int $imageId): bool
     {
-        $image = ImageFile::withTrashed()->find($imageId);
+        $image = MediaFile::withTrashed()->find($imageId);
         
         if (!$image || !$image->trashed()) {
             return false;
@@ -197,7 +198,7 @@ class ImageService
      */
     public function permanentlyDeleteImage(int $imageId): bool
     {
-        $image = ImageFile::withTrashed()->find($imageId);
+        $image = MediaFile::withTrashed()->find($imageId);
         
         if (!$image) {
             return false;
@@ -227,7 +228,7 @@ class ImageService
      */
     public function bulkUpdateFavorite(array $imageIds, bool $isFavorite): int
     {
-        return ImageFile::whereIn('id', $imageIds)->update(['is_favorite' => $isFavorite]);
+        return MediaFile::whereIn('id', $imageIds)->update(['is_favorite' => $isFavorite]);
     }
 
     /**
@@ -257,7 +258,7 @@ class ImageService
      */
     public function getBulkDownloadUrls(array $imageIds): array
     {
-        return ImageFile::whereIn('id', $imageIds)
+        return MediaFile::whereIn('id', $imageIds)
             ->get()
             ->map(fn($image) => $this->getImageUrl($image->file_path))
             ->toArray();
@@ -271,13 +272,13 @@ class ImageService
     public function getStats(): array
     {
         return [
-            'total' => ImageFile::count(),
-            'favorites' => ImageFile::where('is_favorite', true)->count(),
-            'trashed' => ImageFile::onlyTrashed()->count(),
-            'completed' => ImageFile::where('processing_status', 'completed')->count(),
-            'pending' => ImageFile::where('processing_status', 'pending')->count(),
-            'processing' => ImageFile::where('processing_status', 'processing')->count(),
-            'failed' => ImageFile::where('processing_status', 'failed')->count(),
+            'total' => MediaFile::count(),
+            'favorites' => MediaFile::where('is_favorite', true)->count(),
+            'trashed' => MediaFile::onlyTrashed()->count(),
+            'completed' => MediaFile::where('processing_status', 'completed')->count(),
+            'pending' => MediaFile::where('processing_status', 'pending')->count(),
+            'processing' => MediaFile::where('processing_status', 'processing')->count(),
+            'failed' => MediaFile::where('processing_status', 'failed')->count(),
         ];
     }
 
@@ -291,7 +292,7 @@ class ImageService
      */
     public function loadImages(array $filters = [], string $sortBy = 'date_taken', string $sortDirection = 'desc'): Collection
     {
-        $query = ImageFile::query();
+        $query = MediaFile::query();
         
         // Apply filters
         if ($filters['showTrash'] ?? false) {

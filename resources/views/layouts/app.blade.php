@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
 
-    <title>{{ config('app.name', 'Avinash-EYE') }} - {{ $title ?? 'Image Analysis & Semantic Search' }}</title>
+    <title>{{ config('app.name', 'Avinash-EYE') }} - {{ $title ?? 'Media Analysis & Semantic Search' }}</title>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -177,15 +177,15 @@
             margin: 0 auto;
         }
 
-        /* Image Masonry Grid */
-        .photos-grid {
+        /* Media Masonry Grid */
+        .media-grid {
             columns: 5 250px;
             column-gap: 4px;
             row-gap: 4px;
             margin-top: 1rem;
         }
 
-        .photo-item {
+        .media-item {
             break-inside: avoid;
             margin-bottom: 4px;
             position: relative;
@@ -195,18 +195,18 @@
             background: var(--hover-bg);
         }
 
-        .photo-item img {
+        .media-item img {
             width: 100%;
             height: auto;
             display: block;
             transition: transform 0.3s ease;
         }
 
-        .photo-item:hover img {
+        .media-item:hover img {
             transform: scale(1.05);
         }
 
-        .photo-overlay {
+        .media-overlay {
             position: absolute;
             inset: 0;
             background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 50%);
@@ -219,24 +219,24 @@
             color: white;
         }
 
-        .photo-item:hover .photo-overlay {
+        .media-item:hover .media-overlay {
             opacity: 1;
         }
 
-        .photo-overlay-title {
+        .media-overlay-title {
             font-weight: 500;
             font-size: 0.875rem;
             margin-bottom: 0.25rem;
             text-shadow: 0 1px 2px rgba(0,0,0,0.3);
         }
 
-        .photo-overlay-meta {
+        .media-overlay-meta {
             font-size: 0.75rem;
             opacity: 0.9;
         }
 
         /* Checkbox overlay for selection */
-        .photo-checkbox {
+        .media-checkbox {
             position: absolute;
             top: 0.5rem;
             left: 0.5rem;
@@ -250,7 +250,7 @@
             cursor: pointer;
         }
 
-        .photo-item:hover .photo-checkbox {
+        .media-item:hover .media-checkbox {
             opacity: 1;
         }
 
@@ -497,7 +497,7 @@
                 flex-basis: 100%;
             }
 
-            .photos-grid {
+            .media-grid {
                 columns: 2 150px;
             }
 
@@ -537,12 +537,12 @@
 
         <div class="search-bar-container">
             <span class="search-icon material-symbols-outlined">search</span>
-            <input type="text" class="search-bar" placeholder="Search your photos" id="global-search">
+            <input type="text" class="search-bar" placeholder="Search your files" id="global-search">
         </div>
 
                 <div class="nav-links">
                     <a wire:navigate href="{{ route('gallery') }}" class="nav-link {{ request()->routeIs('gallery') ? 'active' : '' }}">
-                        Photos
+                        Gallery
                     </a>
                     <a wire:navigate href="{{ route('collections') }}" class="nav-link {{ request()->routeIs('collections') ? 'active' : '' }}">
                         Collections
@@ -663,13 +663,13 @@
         // User menu toggle
         const userMenuBtn = document.getElementById('user-menu-btn');
         const userMenu = document.getElementById('user-menu');
-        
+
         if (userMenuBtn && userMenu) {
             userMenuBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 userMenu.style.display = userMenu.style.display === 'none' ? 'block' : 'none';
             });
-            
+
             // Close menu when clicking outside
             document.addEventListener('click', (e) => {
                 if (!userMenuBtn.contains(e.target) && !userMenu.contains(e.target)) {
@@ -677,6 +677,42 @@
                 }
             });
         }
+
+        // Download event handlers for Livewire
+        document.addEventListener('livewire:init', () => {
+            // Single file download
+            Livewire.on('download-image', (event) => {
+                const url = event.url || event[0]?.url;
+                const filename = event.filename || event[0]?.filename || 'download';
+
+                if (url) {
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = filename;
+                    link.style.display = 'none';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            });
+
+            // Multiple file downloads
+            Livewire.on('download-multiple', (event) => {
+                const urls = event.urls || event[0]?.urls || [];
+
+                urls.forEach((item, index) => {
+                    setTimeout(() => {
+                        const link = document.createElement('a');
+                        link.href = item.url;
+                        link.download = item.filename || `download-${index + 1}`;
+                        link.style.display = 'none';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }, index * 500); // Stagger downloads by 500ms
+                });
+            });
+        });
     </script>
 </body>
 </html>

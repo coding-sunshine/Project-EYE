@@ -100,19 +100,19 @@ class MonitorSystem extends Command
         
         // Check Processing Status (use PostgreSQL)
         $processingImages = DB::connection('pgsql')
-            ->table('image_files')
+            ->table('media_files')
             ->where('processing_status', 'processing')
             ->where('processing_started_at', '<', now()->subMinutes(10))
             ->count();
-            
+
         if ($processingImages > 0) {
-            $issues[] = "Images: {$processingImages} stuck in processing";
-            $this->warn("⚠️  Images: {$processingImages} stuck in processing");
-            
+            $issues[] = "Media: {$processingImages} stuck in processing";
+            $this->warn("⚠️  Media: {$processingImages} stuck in processing");
+
             if ($this->option('fix')) {
-                // Reset stuck images (use PostgreSQL)
+                // Reset stuck media files (use PostgreSQL)
                 DB::connection('pgsql')
-                    ->table('image_files')
+                    ->table('media_files')
                     ->where('processing_status', 'processing')
                     ->where('processing_started_at', '<', now()->subMinutes(10))
                     ->update([
@@ -120,8 +120,8 @@ class MonitorSystem extends Command
                         'processing_started_at' => null,
                         'processing_error' => 'Reset by monitor: Stuck in processing'
                     ]);
-                    
-                $this->info("🔧 Reset {$processingImages} stuck images to pending");
+
+                $this->info("🔧 Reset {$processingImages} stuck media files to pending");
             }
         }
         

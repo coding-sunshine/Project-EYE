@@ -2,7 +2,7 @@
 
 namespace App\Events;
 
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
@@ -17,7 +17,7 @@ class ImageProcessed implements ShouldBroadcast
      * Create a new event instance.
      */
     public function __construct(
-        public ImageFile $imageFile
+        public MediaFile $imageFile
     ) {}
 
     /**

@@ -75,12 +75,12 @@ services:
             echo "📥 Checking/pulling required models..."
             sleep 5  # Give Ollama a moment to fully initialize
             
-            # Check if llava exists
+            # Check if llava:13b-v1.6 exists (vision model for scene classification)
             if ! /usr/bin/ollama list 2>/dev/null | grep -q "llava"; then
-              echo "⬇️  Pulling LLaVA model..."
-              /usr/bin/ollama pull llava 2>&1 | grep -E "(pulling|success|already)" || true
+              echo "⬇️  Pulling LLaVA 1.6 13B vision model (~8GB, may take a few minutes)..."
+              /usr/bin/ollama pull llava:13b-v1.6 2>&1 | grep -E "(pulling|success|already)" || true
             else
-              echo "✅ LLaVA model already available"
+              echo "✅ LLaVA vision model already available"
             fi
             
             echo "🎉 All models ready!"
@@ -125,7 +125,7 @@ services:
     ports:
       - "${PYTHON_AI_PORT:-8000}:8000"
     volumes:
-      - ./storage/app/public/images:/app/shared:rw
+      - ./storage/app/public:/app/shared:rw
       - ./python-ai:/app:rw
       - model-cache:/root/.cache/huggingface
       - training-data:/app/training_data:rw
@@ -170,7 +170,7 @@ services:
     ports:
       - "${NODE_PROCESSOR_PORT:-3000}:3000"
     volumes:
-      - ./storage/app/public/images:/app/shared:rw
+      - ./storage/app/public:/app/shared:rw
       - ./node-image-processor:/app:rw
       - /app/node_modules
     networks:
@@ -211,7 +211,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
       - ./docker/laravel/init.sh:/init.sh:ro
     networks:
       - avinash-network
@@ -321,7 +320,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
     networks:
       - avinash-network
     environment:
@@ -386,7 +384,6 @@ services:
     working_dir: /var/www/html
     volumes:
       - .:/var/www/html:rw
-      - ./storage/app/public/images:/var/www/html/storage/app/public/images:rw
     networks:
       - avinash-network
     environment:
@@ -465,6 +462,39 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Adminer - Database Management Tool
+  adminer:
+    image: adminer:latest
+    container_name: avinash-eye-adminer
+    ports:
+      - "8081:8080"
+    networks:
+      - avinash-network
+    environment:
+      - ADMINER_DEFAULT_SERVER=db
+      - ADMINER_DESIGN=pepa-linha
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "php", "-r", "if (file_exists('/var/www/html/index.php')) exit(0); exit(1);"]
       interval: 30s
       timeout: 10s
       retries: 3

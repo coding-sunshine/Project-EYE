@@ -8,6 +8,14 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libopenblas-dev \
     liblapack-dev \
+    poppler-utils \
+    tesseract-ocr \
+    # OpenCV dependencies
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

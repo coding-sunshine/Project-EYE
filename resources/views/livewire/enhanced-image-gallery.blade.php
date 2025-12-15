@@ -13,7 +13,7 @@
                     <span class="material-symbols-outlined" style="font-size: 1.5rem; vertical-align: middle; margin-right: 0.5rem;">search</span>
                     Search Results
                 @else
-                    Photos
+                    Gallery
                 @endif
             </h1>
             <p style="font-size: 0.875rem; color: var(--secondary-color);">
@@ -22,7 +22,7 @@
                 @elseif ($searchQuery)
                     {{ $searchResultsCount }} {{ Str::plural('result', $searchResultsCount) }} for "{{ Str::limit($searchQuery, 50) }}"
                 @else
-                    {{ count($images) }} {{ Str::plural('photo', count($images)) }}
+                    {{ count($files) }} {{ Str::plural('file', count($files)) }}
                 @endif
             </p>
         </div>
@@ -40,7 +40,7 @@
             <!-- Sort Dropdown -->
             @if (!$searchQuery)
                 <select wire:model.live="sortBy" class="btn btn-secondary" style="padding: 0.5rem 1rem; cursor: pointer;">
-                    <option value="date_taken">📅 Photo Date</option>
+                    <option value="date_taken">📅 File Date</option>
                     <option value="created_at">⬆️ Upload Date</option>
                     <option value="is_favorite">⭐ Favorites First</option>
                 </select>
@@ -74,6 +74,12 @@
             </a>
         </div>
     </div>
+
+    @if (session()->has('message'))
+        <div style="padding: 1rem; background: #e6f4ea; border-left: 4px solid #137333; border-radius: 4px; margin-bottom: 1rem;">
+            <span style="color: #137333;">✓</span> {{ session('message') }}
+        </div>
+    @endif
 
     <!-- Bulk Actions Toolbar (Selection Mode) -->
     @if ($selectionMode)
@@ -126,11 +132,11 @@
     <div wire:loading wire:target="search, performSearch" style="margin-bottom: 1.5rem;">
         <div class="card" style="padding: 2rem; text-align: center; background: #f8f9fa;">
             <div class="spinner" style="margin: 0 auto 1rem;"></div>
-            <p style="color: var(--secondary-color);">Searching your photos...</p>
+            <p style="color: var(--secondary-color);">Searching your files...</p>
         </div>
     </div>
 
-    @if (empty($images))
+    @if (empty($files))
         <!-- Empty State -->
         <div class="empty-state">
             <div class="empty-state-icon">
@@ -141,7 +147,7 @@
                 @elseif ($showFavorites)
                     ⭐
                 @else
-                    📸
+                    📁
                 @endif
             </div>
             <h2 class="empty-state-title">
@@ -150,20 +156,20 @@
                 @elseif ($showTrash)
                     No items in trash
                 @elseif ($showFavorites)
-                    No favorite photos
+                    No favorites
                 @else
-                    No photos yet
+                    No files yet
                 @endif
             </h2>
             <p class="empty-state-description">
                 @if ($searchQuery)
-                    No photos match "{{ $searchQuery }}". Try different keywords or upload more photos.
+                    No files match "{{ $searchQuery }}". Try different keywords or upload more files.
                 @elseif ($showTrash)
-                    Deleted photos will appear here
+                    Deleted items will appear here
                 @elseif ($showFavorites)
-                    Star photos to see them here
+                    Mark favorites to see them here
                 @else
-                    Upload photos to get started
+                    Upload files to get started
                 @endif
             </p>
             @if ($searchQuery)
@@ -174,59 +180,89 @@
             @elseif (!$showTrash && !$showFavorites)
                 <a wire:navigate href="{{ route('instant-upload') }}" class="btn btn-primary">
                     <span class="material-symbols-outlined" style="font-size: 1.125rem;">upload</span>
-                    Upload photos
+                    Upload files
                 </a>
             @endif
         </div>
     @else
         <!-- Google Photos-style Masonry Grid -->
-        <div class="photos-grid">
+        <div class="media-grid">
             @php $lastDate = null; @endphp
-            
-            @foreach ($images as $image)
+
+            @foreach ($files as $file)
                 @php
                     // Use original photo date (date_taken) if available, otherwise upload date
-                    $imageDate = $image['date_for_display'];
+                    $imageDate = $file['date_for_display'];
                 @endphp
-                
+
                 @if ($imageDate !== $lastDate)
                     <div class="date-separator">{{ $imageDate }}</div>
                     @php $lastDate = $imageDate; @endphp
                 @endif
-                
-                <div class="photo-item" 
-                     wire:click="@if($selectionMode)toggleSelect({{ $image['id'] }})@else viewDetails({{ $image['id'] }})@endif"
-                     style="position: relative; cursor: pointer; {{ $selectionMode && in_array($image['id'], $selectedIds) ? 'outline: 3px solid var(--primary-color); outline-offset: -3px;' : '' }}">
-                    
-                    <img src="{{ $image['url'] }}" alt="{{ $image['filename'] }}" loading="lazy" style="pointer-events: none;">
-                    
+
+                <div class="media-item"
+                     wire:click="@if($selectionMode)toggleSelect({{ $file['id'] }})@else viewDetails({{ $file['id'] }})@endif"
+                     style="position: relative; cursor: pointer; {{ $selectionMode && in_array($file['id'], $selectedIds) ? 'outline: 3px solid var(--primary-color); outline-offset: -3px;' : '' }}">
+
+                    <img src="{{ $file['url'] }}" alt="{{ $file['filename'] }}" loading="lazy" style="pointer-events: none;">
+
+                    <!-- Media Type Badge -->
+                    @if (!$selectionMode)
+                        <div style="position: absolute; top: 8px; left: 8px; z-index: 10; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; text-transform: uppercase;">
+                            {{ strtoupper($file['media_type']) }}
+                        </div>
+                    @endif
+
+                    <!-- Action Buttons (Bottom Right) -->
+                    @if (!$selectionMode)
+                        <div style="position: absolute; bottom: 8px; right: 8px; z-index: 10; display: flex; gap: 8px;">
+                            <!-- Download Button -->
+                            <button wire:click.stop="downloadFile({{ $file['id'] }})"
+                                    style="background: rgba(255,255,255,0.9); border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: all 0.2s;"
+                                    onmouseover="this.style.background='white'; this.style.transform='scale(1.1)';"
+                                    onmouseout="this.style.background='rgba(255,255,255,0.9)'; this.style.transform='scale(1)';"
+                                    title="Download file">
+                                <span class="material-symbols-outlined" style="font-size: 1.125rem; color: var(--primary-color);">download</span>
+                            </button>
+
+                            <!-- Reanalyze Button -->
+                            <button wire:click.stop="reanalyze({{ $file['id'] }})"
+                                    style="background: rgba(255,255,255,0.9); border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); transition: all 0.2s;"
+                                    onmouseover="this.style.background='white'; this.style.transform='scale(1.1)';"
+                                    onmouseout="this.style.background='rgba(255,255,255,0.9)'; this.style.transform='scale(1)';"
+                                    title="Reanalyze file">
+                                <span class="material-symbols-outlined" style="font-size: 1.125rem; color: var(--primary-color);">refresh</span>
+                            </button>
+                        </div>
+                    @endif
+
                     <!-- Favorite Star (Top Right) -->
-                    @if ($image['is_favorite'] && !$selectionMode)
+                    @if ($file['is_favorite'] && !$selectionMode)
                         <div style="position: absolute; top: 0.5rem; right: 0.5rem; width: 28px; height: 28px; background: rgba(0,0,0,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
                             <span class="material-symbols-outlined" style="font-size: 1rem; color: #f9ab00;">star</span>
                         </div>
                     @endif
-                    
+
                     <!-- Selection Checkbox (Top Left) -->
                     @if ($selectionMode)
                         <div style="position: absolute; top: 0.5rem; left: 0.5rem; width: 24px; height: 24px; background: white; border: 2px solid var(--primary-color); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
-                            @if (in_array($image['id'], $selectedIds))
+                            @if (in_array($file['id'], $selectedIds))
                                 <span class="material-symbols-outlined" style="font-size: 1.25rem; color: var(--primary-color);">check</span>
                             @endif
                         </div>
                     @endif
-                    
+
                     <!-- Hover Overlay -->
-                    <div class="photo-overlay" style="{{ $selectionMode ? 'opacity: 0 !important;' : '' }}">
-                        @if (!empty($image['meta_tags']))
-                            <div class="photo-overlay-title">
-                                {{ implode(' · ', array_slice($image['meta_tags'], 0, 2)) }}
+                    <div class="media-overlay" style="pointer-events: none; {{ $selectionMode ? 'opacity: 0 !important;' : '' }}">
+                        @if (!empty($file['meta_tags']))
+                            <div class="media-overlay-title">
+                                {{ implode(' · ', array_slice($file['meta_tags'], 0, 2)) }}
                             </div>
                         @endif
-                        <div class="photo-overlay-meta">
-                            @if ($image['face_count'] > 0)
+                        <div class="media-overlay-meta">
+                            @if ($file['face_count'] > 0)
                                 <span class="material-symbols-outlined" style="font-size: 1rem; vertical-align: middle;">face</span>
-                                {{ $image['face_count'] }}
+                                {{ $file['face_count'] }}
                             @endif
                         </div>
                     </div>
@@ -259,7 +295,7 @@
                             <button wire:click.stop="restoreImage({{ $selectedImage['id'] }})" class="icon-btn" style="background: rgba(76, 175, 80, 0.9); color: white;">
                                 <span class="material-symbols-outlined">restore_from_trash</span>
                             </button>
-                            <button wire:click.stop="permanentlyDelete({{ $selectedImage['id'] }})" class="icon-btn" style="background: rgba(211, 47, 47, 0.9); color: white;" onclick="return confirm('Permanently delete this image? This cannot be undone!')">
+                            <button wire:click.stop="permanentlyDelete({{ $selectedImage['id'] }})" class="icon-btn" style="background: rgba(211, 47, 47, 0.9); color: white;" onclick="return confirm('Permanently delete this file? This cannot be undone!')">
                                 <span class="material-symbols-outlined">delete_forever</span>
                             </button>
                         @else
@@ -488,7 +524,7 @@ document.addEventListener('keydown', (e) => {
     
     // Delete key
     if (e.key === 'Delete' && @this.selectedIds.length > 0) {
-        if (confirm('Delete selected images?')) {
+        if (confirm('Delete selected files?')) {
             @this.bulkDelete();
         }
     }

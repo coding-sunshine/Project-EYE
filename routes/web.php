@@ -51,4 +51,14 @@ Route::middleware('auth')->group(function () {
     Route::get('/settings', Settings::class)->name('settings');
     Route::get('/system-monitor', SystemMonitor::class)->name('system-monitor');
     Route::get('/people', PeopleAndPets::class)->name('people');
+
+    // Media streaming routes (video/audio/archive)
+    Route::get('/media/{id}/stream', [App\Http\Controllers\MediaController::class, 'stream'])->name('media.stream');
+    Route::get('/media/{id}/thumbnail', [App\Http\Controllers\MediaController::class, 'thumbnail'])->name('media.thumbnail');
+    Route::get('/media/{id}/download', [App\Http\Controllers\MediaController::class, 'download'])->name('media.download');
+
+    // Document routes
+    Route::get('/documents/{id}/preview', [App\Http\Controllers\DocumentController::class, 'preview'])->name('documents.preview');
+    Route::get('/documents/{id}/download', [App\Http\Controllers\DocumentController::class, 'download'])->name('documents.download');
+    Route::get('/documents/{id}/thumbnail', [App\Http\Controllers\DocumentController::class, 'thumbnail'])->name('documents.thumbnail');
 });

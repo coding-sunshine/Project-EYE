@@ -3,7 +3,7 @@
 namespace App\Livewire;
 
 use Livewire\Component;
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use App\Services\ImageService;
 use App\Services\SearchService;
 use App\Repositories\ImageRepository;
@@ -31,7 +31,7 @@ class EnhancedImageGallery extends Component
         $this->searchService = $searchService;
     }
 
-    public $images = [];
+    public $files = [];
     public $selectedImage = null;
     public $filterTag = '';
     public $showFavorites = false;
@@ -89,7 +89,7 @@ class EnhancedImageGallery extends Component
         ];
         
         $images = $this->imageService->loadImages($filters, $this->sortBy, $this->sortDirection);
-        $this->images = $this->imageService->transformCollectionForDisplay($images);
+        $this->files = $this->imageService->transformCollectionForDisplay($images);
         $this->searchResultsCount = 0;
     }
     
@@ -110,9 +110,9 @@ class EnhancedImageGallery extends Component
         try {
             // Use SearchService for semantic search
             $results = $this->searchService->search($this->searchQuery, 50);
-            $this->images = $this->imageService->transformCollectionForDisplay($results);
-            $this->searchResultsCount = count($this->images);
-            
+            $this->files = $this->imageService->transformCollectionForDisplay($results);
+            $this->searchResultsCount = count($this->files);
+
             Log::info('Gallery search completed', [
                 'query' => $this->searchQuery,
                 'results' => $this->searchResultsCount
@@ -122,7 +122,7 @@ class EnhancedImageGallery extends Component
                 'query' => $this->searchQuery,
                 'error' => $e->getMessage()
             ]);
-            $this->images = [];
+            $this->files = [];
             $this->searchResultsCount = 0;
         }
         
@@ -168,8 +168,8 @@ class EnhancedImageGallery extends Component
         if ($this->selectionMode) {
             return;
         }
-        
-        $this->selectedImage = collect($this->images)->firstWhere('id', $imageId);
+
+        $this->selectedImage = collect($this->files)->firstWhere('id', $imageId);
         
         // Use ImageService to increment view count
         $this->imageService->incrementViewCount($imageId);
@@ -270,7 +270,7 @@ class EnhancedImageGallery extends Component
     
     public function selectAll()
     {
-        $this->selectedIds = collect($this->images)->pluck('id')->toArray();
+        $this->selectedIds = collect($this->files)->pluck('id')->toArray();
     }
     
     public function deselectAll()
@@ -394,7 +394,48 @@ class EnhancedImageGallery extends Component
         $this->sortDirection = $this->sortDirection === 'desc' ? 'asc' : 'desc';
         $this->loadImages();
     }
-    
+
+    public function reanalyze($imageId)
+    {
+        $image = MediaFile::find($imageId);
+        if ($image) {
+            // Reset processing status to rerun analysis
+            $image->update([
+                'processing_status' => 'pending',
+                'processing_error' => null,
+                'processing_started_at' => null,
+                'processing_completed_at' => null,
+            ]);
+
+            // Dispatch job for reanalysis
+            \App\Jobs\ProcessImageAnalysis::dispatch($image->id)
+                ->onQueue('image-processing');
+
+            $this->loadImages();
+            $this->loadStats();
+
+            // Show success message
+            session()->flash('message', 'File queued for reanalysis');
+        }
+    }
+
+    public function downloadFile($fileId)
+    {
+        $file = MediaFile::find($fileId);
+        if ($file) {
+            // Determine the appropriate download URL based on media type
+            $url = match($file->media_type) {
+                'image' => $this->imageService->getImageUrl($file->file_path),
+                'document', 'code', 'other' => route('documents.download', $file->id),
+                'video', 'audio', 'archive' => route('media.download', $file->id),
+                default => $this->imageService->getImageUrl($file->file_path),
+            };
+
+            $filename = $file->original_filename ?? basename($file->file_path);
+            $this->dispatch('download-image', url: $url, filename: $filename);
+        }
+    }
+
     public function render()
     {
         return view('livewire.enhanced-image-gallery')

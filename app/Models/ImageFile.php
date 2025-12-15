@@ -2,119 +2,16 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\DB;
-use Pgvector\Laravel\Vector;
-use Pgvector\Laravel\HasNeighbors;
-
-class ImageFile extends Model
+class ImageFile extends MediaFile
 {
-    use HasFactory, HasNeighbors, SoftDeletes;
-
     /**
-     * Minimum similarity threshold for search results (0-1 scale).
-     */
-    const MIN_SIMILARITY = 0.35; // 35% - only return meaningful matches
-
-    /**
-     * The attributes that are mass assignable.
+     * Get the media type for images.
      *
-     * @var array<int, string>
+     * @return string
      */
-    protected $fillable = [
-        'file_path',
-        'original_filename',
-        'description',
-        'detailed_description',
-        'meta_tags',
-        'face_count',
-        'face_encodings',
-        'embedding',
-        // File metadata
-        'mime_type',
-        'file_size',
-        'width',
-        'height',
-        'exif_data',
-        // EXIF fields
-        'camera_make',
-        'camera_model',
-        'lens_model',
-        'date_taken',
-        'exposure_time',
-        'f_number',
-        'iso',
-        'focal_length',
-        'gps_latitude',
-        'gps_longitude',
-        'gps_location_name',
-        // Gallery features
-        'is_favorite',
-        'view_count',
-        'last_viewed_at',
-        'edit_history',
-        'album',
-        // Processing status
-        'processing_status',
-        'processing_started_at',
-        'processing_completed_at',
-        'processing_error',
-        'processing_attempts',
-    ];
-
-    /**
-     * The attributes that should be cast.
-     *
-     * @var array<string, string>
-     */
-    protected $casts = [
-        'embedding' => Vector::class,
-        'meta_tags' => 'array',
-        'face_encodings' => 'array',
-        'exif_data' => 'array',
-        'date_taken' => 'datetime',
-        'is_favorite' => 'boolean',
-        'last_viewed_at' => 'datetime',
-        'edit_history' => 'array',
-        'processing_started_at' => 'datetime',
-        'processing_completed_at' => 'datetime',
-    ];
-
-    /**
-     * Search for similar images using vector similarity.
-     *
-     * @param array $queryEmbedding The query embedding vector
-     * @param int $limit Number of results to return
-     * @param float|null $minSimilarity Minimum similarity threshold
-     * @return \Illuminate\Support\Collection
-     */
-    public static function searchSimilar(array $queryEmbedding, int $limit = 30, ?float $minSimilarity = null)
+    protected function getMediaType(): string
     {
-        // Use class constant if not provided
-        $minSimilarity = $minSimilarity ?? self::MIN_SIMILARITY;
-        
-        // Convert array to pgvector format
-        $vectorString = '[' . implode(',', $queryEmbedding) . ']';
-        
-        return DB::select("
-            SELECT 
-                id,
-                file_path,
-                description,
-                detailed_description,
-                meta_tags,
-                face_count,
-                1 - (embedding <=> ?::vector) AS similarity
-            FROM image_files
-            WHERE embedding IS NOT NULL
-              AND deleted_at IS NULL
-              AND (1 - (embedding <=> ?::vector)) >= ?
-              AND processing_status = 'completed'
-            ORDER BY embedding <=> ?::vector
-            LIMIT ?
-        ", [$vectorString, $vectorString, $minSimilarity, $vectorString, $limit]);
+        return 'image';
     }
 
     /**
@@ -124,17 +21,130 @@ class ImageFile extends Model
      */
     public function getImageUrlAttribute(): string
     {
-        return asset('storage/' . str_replace('public/', '', $this->file_path));
+        return $this->file_url;
     }
 
     /**
-     * Get the filename without path.
+     * Get the thumbnail URL for the image.
      *
      * @return string
      */
-    public function getFilenameAttribute(): string
+    public function getThumbnailUrlAttribute(): string
     {
-        return basename($this->file_path);
+        // Assuming thumbnails are stored in a thumbnails subdirectory
+        $filename = basename($this->file_path);
+        return asset('storage/thumbnails/' . $filename);
+    }
+
+    /**
+     * Get EXIF summary for display.
+     *
+     * @return array
+     */
+    public function getExifSummaryAttribute(): array
+    {
+        if (!$this->exif_data) {
+            return [];
+        }
+
+        $summary = [];
+
+        // Camera info
+        if ($this->camera_make && $this->camera_model) {
+            $summary['camera'] = trim($this->camera_make . ' ' . $this->camera_model);
+        }
+
+        // Lens info
+        if ($this->lens_model) {
+            $summary['lens'] = $this->lens_model;
+        }
+
+        // Camera settings
+        $settings = [];
+        if ($this->f_number) {
+            $settings[] = 'f/' . $this->f_number;
+        }
+        if ($this->exposure_time) {
+            $settings[] = $this->exposure_time;
+        }
+        if ($this->iso) {
+            $settings[] = 'ISO ' . $this->iso;
+        }
+        if ($this->focal_length) {
+            $settings[] = $this->focal_length . 'mm';
+        }
+
+        if (!empty($settings)) {
+            $summary['settings'] = implode(' • ', $settings);
+        }
+
+        // Date taken
+        if ($this->date_taken) {
+            $summary['date'] = $this->date_taken->format('M d, Y g:i A');
+        }
+
+        // Location
+        if ($this->gps_location_name) {
+            $summary['location'] = $this->gps_location_name;
+        } elseif ($this->gps_latitude && $this->gps_longitude) {
+            $summary['location'] = number_format($this->gps_latitude, 4) . ', ' .
+                                   number_format($this->gps_longitude, 4);
+        }
+
+        // Dimensions
+        if ($this->width && $this->height) {
+            $summary['dimensions'] = $this->width . ' × ' . $this->height;
+            $megapixels = ($this->width * $this->height) / 1000000;
+            $summary['megapixels'] = number_format($megapixels, 1) . ' MP';
+        }
+
+        return $summary;
+    }
+
+    /**
+     * Get the aspect ratio.
+     *
+     * @return string|null
+     */
+    public function getAspectRatioAttribute(): ?string
+    {
+        if (!$this->width || !$this->height) {
+            return null;
+        }
+
+        $gcd = $this->gcd($this->width, $this->height);
+        $ratioWidth = $this->width / $gcd;
+        $ratioHeight = $this->height / $gcd;
+
+        // Common aspect ratios
+        $commonRatios = [
+            '1:1' => 1.0,
+            '4:3' => 1.333,
+            '3:2' => 1.5,
+            '16:9' => 1.778,
+            '21:9' => 2.333,
+        ];
+
+        $currentRatio = $this->width / $this->height;
+
+        foreach ($commonRatios as $name => $value) {
+            if (abs($currentRatio - $value) < 0.01) {
+                return $name;
+            }
+        }
+
+        return $ratioWidth . ':' . $ratioHeight;
+    }
+
+    /**
+     * Calculate greatest common divisor.
+     *
+     * @param int $a
+     * @param int $b
+     * @return int
+     */
+    private function gcd(int $a, int $b): int
+    {
+        return $b ? $this->gcd($b, $a % $b) : $a;
     }
 }
-

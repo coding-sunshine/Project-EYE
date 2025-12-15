@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\ImageFile;
+use App\Models\MediaFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
@@ -65,7 +65,7 @@ class SearchService
             // Cached data is array of ['id' => id, 'similarity' => score, 'match_type' => type]
             $ids = array_column($cachedData, 'id');
             // Load models from cached IDs
-            $models = ImageFile::whereIn('id', $ids)->get()->keyBy('id');
+            $models = MediaFile::whereIn('id', $ids)->get()->keyBy('id');
             // Return in original order with similarity scores
             return collect($cachedData)->map(function ($item) use ($models) {
                 $model = $models->get($item['id'] ?? null);
@@ -143,7 +143,7 @@ class SearchService
         $queryLower = strtolower($query);
         
         // Fast text search (uses indexes, limited results)
-        $textResults = ImageFile::where('processing_status', 'completed')
+        $textResults = MediaFile::where('processing_status', 'completed')
             ->whereNull('deleted_at')
             ->where(function ($q) use ($query, $queryLower) {
                 $q->where('description', 'ilike', $query . '%')  // Prefix match is faster
@@ -178,7 +178,7 @@ class SearchService
             return $textResults->take($limit);
         }
         
-        $vectorModels = ImageFile::whereIn('id', $ids)
+        $vectorModels = MediaFile::whereIn('id', $ids)
             ->get()
             ->keyBy('id');
         
@@ -211,7 +211,7 @@ class SearchService
      */
     protected function fastKeywordSearch(string $query, int $limit): Collection
     {
-        return ImageFile::where('processing_status', 'completed')
+        return MediaFile::where('processing_status', 'completed')
             ->whereNull('deleted_at')
             ->where(function ($q) use ($query) {
                 $q->where('description', 'ilike', $query . '%')  // Prefix match
@@ -243,7 +243,7 @@ class SearchService
      */
     protected function keywordSearch(string $query, int $limit): Collection
     {
-        return ImageFile::where('processing_status', 'completed')
+        return MediaFile::where('processing_status', 'completed')
             ->whereNull('deleted_at')
             ->where(function ($q) use ($query) {
                 $this->applySearchConditions($q, $query);
@@ -438,11 +438,11 @@ class SearchService
     /**
      * Calculate relevance score based on match quality.
      *
-     * @param ImageFile $image
+     * @param MediaFile $image
      * @param string $query
      * @return int Score from 0-100
      */
-    public function calculateRelevanceScore(ImageFile $image, string $query): int
+    public function calculateRelevanceScore(MediaFile $image, string $query): int
     {
         $queryLower = strtolower($query);
         
@@ -499,11 +499,11 @@ class SearchService
     /**
      * Calculate score based on keyword matches.
      *
-     * @param ImageFile $image
+     * @param MediaFile $image
      * @param string $queryLower
      * @return int
      */
-    protected function calculateKeywordScore(ImageFile $image, string $queryLower): int
+    protected function calculateKeywordScore(MediaFile $image, string $queryLower): int
     {
         $keywords = $this->extractKeywords($queryLower);
         $matchCount = 0;
@@ -544,9 +544,9 @@ class SearchService
     public function getStats(): array
     {
         return [
-            'total_images' => ImageFile::count(),
-            'completed_images' => ImageFile::where('processing_status', 'completed')->count(),
-            'pending_images' => ImageFile::where('processing_status', 'pending')->count(),
+            'total_images' => MediaFile::count(),
+            'completed_images' => MediaFile::where('processing_status', 'completed')->count(),
+            'pending_images' => MediaFile::where('processing_status', 'pending')->count(),
         ];
     }
 }

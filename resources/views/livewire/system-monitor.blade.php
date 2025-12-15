@@ -268,7 +268,7 @@
                 </div>
             </div>
             <div>
-                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Images Storage</div>
+                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Media Storage</div>
                 <div style="font-weight: 600; color: var(--text-primary);">{{ $diskUsage['images_size'] ?? 0 }} GB</div>
             </div>
             <div>

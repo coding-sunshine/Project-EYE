@@ -11,19 +11,16 @@ class Settings extends Component
     // Captioning Models
     public $captioning_model;
     public $available_captioning_models = [
-        'Salesforce/blip-image-captioning-large' => 'BLIP Large (Default, Best Quality)',
-        'Salesforce/blip-image-captioning-base' => 'BLIP Base (Faster, Good Quality)',
-        'Salesforce/blip2-opt-2.7b' => 'BLIP-2 (Advanced, Requires More Memory)',
-        'nlpconnect/vit-gpt2-image-captioning' => 'ViT-GPT2 (Fast, Creative Captions)',
+        'florence' => 'Florence-2 (Recommended - Best Quality, Multi-task)',
+        'blip' => 'BLIP Large (Fast, Good Quality)',
     ];
 
     // Embedding Models
     public $embedding_model;
     public $available_embedding_models = [
-        'laion/CLIP-ViT-B-32-laion2B-s34B-b79K' => 'CLIP ViT-B/32 (Default, Best for Search)',
-        'openai/clip-vit-large-patch14' => 'CLIP ViT-L/14 (Higher Quality, Slower)',
-        'openai/clip-vit-base-patch32' => 'CLIP ViT-B/32 OpenAI (Fast, Good Quality)',
-        'facebook/dinov2-base' => 'DINOv2 Base (Self-Supervised, No Text)',
+        'aimv2' => 'AIMv2 (Recommended - Apple\'s model, outperforms SigLIP)',
+        'siglip' => 'SigLIP (Google - Good accuracy for search)',
+        'clip' => 'CLIP (OpenAI - Fast, legacy option)',
     ];
 
     // Face Detection
@@ -32,13 +29,30 @@ class Settings extends Component
     // Ollama
     public $ollama_enabled;
     public $ollama_model;
+    public $ollama_model_document;
     public $available_ollama_models = [
-        'llama2' => 'Llama 2 (Default)',
-        'llama2:13b' => 'Llama 2 13B (Better Quality)',
-        'mistral' => 'Mistral 7B (Fast, Efficient)',
-        'mixtral' => 'Mixtral 8x7B (Highest Quality)',
-        'codellama' => 'Code Llama (Technical Descriptions)',
-        'llava' => 'LLaVA (Vision-Language Model)',
+        // Recommended for Apple Silicon (16GB)
+        'qwen2.5:7b' => 'Qwen 2.5 7B (Recommended - Best Reasoning)',
+        'llava:13b-v1.6' => 'LLaVA 1.6 13B (Best Vision Quality)',
+        'minicpm-v:8b' => 'MiniCPM-V 8B (Fast Vision, Efficient)',
+        'llama3.2:latest' => 'Llama 3.2 (Good General Purpose)',
+        // Legacy options
+        'llava' => 'LLaVA 7B (Legacy Vision)',
+        'mistral' => 'Mistral 7B (Fast, Text Only)',
+    ];
+
+    public $available_ollama_document_models = [
+        'qwen2.5:7b' => 'Qwen 2.5 7B (Recommended - Best for Documents)',
+        'llama3.2:latest' => 'Llama 3.2 (Good Alternative)',
+        'mistral' => 'Mistral 7B (Fast)',
+    ];
+
+    // OCR Engine
+    public $ocr_engine;
+    public $available_ocr_engines = [
+        'auto' => 'Auto (PaddleOCR preferred, Tesseract fallback)',
+        'paddleocr' => 'PaddleOCR (Best accuracy, complex layouts)',
+        'tesseract' => 'Tesseract (Faster, simple documents)',
     ];
 
     // Status
@@ -57,17 +71,21 @@ class Settings extends Component
 
     public function loadSettings()
     {
-        $this->captioning_model = Setting::get('captioning_model', 'Salesforce/blip-image-captioning-large');
-        $this->embedding_model = Setting::get('embedding_model', 'laion/CLIP-ViT-B-32-laion2B-s34B-b79K');
+        $this->captioning_model = Setting::get('captioning_model', 'florence');
+        $this->embedding_model = Setting::get('embedding_model', 'aimv2');
         
         // Load boolean settings and ensure they are actual booleans
         $faceDetection = Setting::get('face_detection_enabled', true);
         $this->face_detection_enabled = is_bool($faceDetection) ? $faceDetection : ($faceDetection === 'true' || $faceDetection === true);
         
-        $ollamaEnabled = Setting::get('ollama_enabled', false);
+        $ollamaEnabled = Setting::get('ollama_enabled', true);
         $this->ollama_enabled = is_bool($ollamaEnabled) ? $ollamaEnabled : ($ollamaEnabled === 'true' || $ollamaEnabled === true);
-        
-        $this->ollama_model = Setting::get('ollama_model', 'llava');
+
+        $this->ollama_model = Setting::get('ollama_model', 'llava:13b-v1.6');
+        $this->ollama_model_document = Setting::get('ollama_model_document', 'qwen2.5:7b');
+
+        // OCR Engine
+        $this->ocr_engine = Setting::get('ocr_engine', 'auto');
     }
 
     public function checkAiServiceStatus()
@@ -90,6 +108,8 @@ class Settings extends Component
             Setting::set('face_detection_enabled', $this->face_detection_enabled); // Save as boolean
             Setting::set('ollama_enabled', $this->ollama_enabled); // Save as boolean
             Setting::set('ollama_model', $this->ollama_model);
+            Setting::set('ollama_model_document', $this->ollama_model_document);
+            Setting::set('ocr_engine', $this->ocr_engine);
 
             $this->saved = true;
             $this->error = null;
